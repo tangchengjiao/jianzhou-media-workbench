@@ -1,13 +1,11 @@
 """对标监控 API：账号 CRUD、扫描、作品墙、作者分析。"""
-from typing import Literal
-
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from .. import benchmarks as bm_svc
-from ..datasource import PLATFORM_LABELS
+from ..datasource import PLATFORM_LABELS, SUPPORTED_PLATFORMS
 from ..db import execute, jloads, query, query_one, transaction
-from ..errors import not_found
+from ..errors import not_found, validation_failed
 from ..jobs import create_job
 from . import current_user_id, ok
 
@@ -32,16 +30,20 @@ def list_benchmarks():
 
 class BenchmarkIn(BaseModel):
     link: str = Field(min_length=1, max_length=2048)
-    platform: Literal["douyin", "xhs"] | None = None
-    scan_range: Literal["30", "60", "all"] = "30"
+    platform: str | None = None
+    scan_count: int | None = Field(default=None, ge=1, le=500)
+    scan_range: str | None = None  # 兼容 Phase 2 旧客户端
     note: str = Field(default="", max_length=300)
 
 
 @router.post("")
 def add_benchmark(body: BenchmarkIn):
     uid = current_user_id()
+    if body.platform and body.platform not in SUPPORTED_PLATFORMS:
+        raise validation_failed(f"暂不支持平台：{body.platform}")
     result = bm_svc.add_benchmark(uid, body.link, body.platform,
-                                  body.scan_range, body.note)
+                                  body.scan_range or "30", body.note,
+                                  scan_count=body.scan_count)
     if result.get("sync_status") == "error":
         return ok({"note": "账号入口已保存，但首次真实同步失败；没有生成替代数据。可在账号卡片上查看原因并重试。",
                    **result})

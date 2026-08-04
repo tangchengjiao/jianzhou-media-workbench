@@ -81,11 +81,13 @@ def main() -> int:
         before_count = len(benchmarks)
         r = c.post("/api/benchmarks", json={
             "link": benchmark["link"], "platform": benchmark["platform"],
-            "scan_range": benchmark["scan_range"], "note": "重复添加验收",
+            "scan_count": 47, "note": "重复添加与自定义条数验收",
         })
         after_count = len(c.get("/api/benchmarks").json()["data"])
         check("重复添加同一账号会刷新而不是创建重复记录",
               r.json()["data"].get("existing") is True and after_count == before_count)
+        refreshed = c.get(f"/api/benchmarks/{benchmark['id']}").json()["data"]
+        check("对标扫描条数支持用户自定义", refreshed["scan_count"] == 47)
 
         # 提取：先计划（不执行），计划含成本与默认不授权
         r = c.post("/api/extraction/plans", json={"signal_id": sig["id"]})

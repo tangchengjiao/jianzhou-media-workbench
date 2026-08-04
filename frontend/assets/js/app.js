@@ -2,6 +2,17 @@
 (function () {
   const { createApp } = Vue;
 
+  function initialCollapsedGroups() {
+    const defaults = { 基础: false, 洞察: false, 创作: false, 复盘: false };
+    try {
+      const saved = JSON.parse(localStorage.getItem('jz-nav-collapsed') || '{}');
+      Object.keys(defaults).forEach((key) => {
+        if (typeof saved[key] === 'boolean') defaults[key] = saved[key];
+      });
+    } catch (_) { /* 损坏的本地偏好不影响导航 */ }
+    return defaults;
+  }
+
   const ICONS = {
     workbench: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>',
     profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M6 16c.6-1.4 1.7-2 3-2s2.4.6 3 2M14.5 10h4M14.5 13.5h4"/></svg>',
@@ -28,7 +39,7 @@
     data() {
       return {
         store, icons: ICONS,
-        collapsed: { 基础: true, 洞察: true, 创作: true, 复盘: true },
+        collapsed: initialCollapsedGroups(),
       };
     },
     computed: {
@@ -51,11 +62,11 @@
       go(p) {
         store.page = p;
         location.hash = '#/' + p;
-        // 导航默认只展开当前工作组
-        const g = store.navGroups.find((g) => g.items.some((i) => i.page === p));
-        Object.keys(this.collapsed).forEach((k) => { this.collapsed[k] = true; });
-        if (g) this.collapsed[g.name] = false;
         document.querySelector('.content') && (document.querySelector('.content').scrollTop = 0);
+      },
+      toggleGroup(name) {
+        this.collapsed[name] = !this.collapsed[name];
+        localStorage.setItem('jz-nav-collapsed', JSON.stringify(this.collapsed));
       },
       toggleTheme() {
         store.theme = store.theme === 'light' ? 'dark' : 'light';

@@ -198,12 +198,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_benchmarks_user_platform_uid
 ON benchmark_accounts(user_id, platform, uid);
 """
 
+BENCHMARK_SCAN_COUNT_MIGRATION = """
+ALTER TABLE benchmark_accounts ADD COLUMN scan_count INTEGER NOT NULL DEFAULT 30;
+UPDATE benchmark_accounts
+SET scan_count = CASE
+  WHEN scan_range = 'all' THEN 200
+  WHEN CAST(scan_range AS INTEGER) BETWEEN 1 AND 500 THEN CAST(scan_range AS INTEGER)
+  ELSE 30
+END;
+CREATE INDEX IF NOT EXISTS idx_benchmarks_user_platform_scan
+ON benchmark_accounts(user_id, platform, scan_count);
+"""
+
 MIGRATIONS = [
     (1, "critical_indexes", INDEX_MIGRATION),
     (2, "constrained_schema_marker",
      "CREATE INDEX IF NOT EXISTS idx_schema_migrations_applied "
      "ON schema_migrations(applied_at);"),
     (3, "benchmark_sync_state", BENCHMARK_SYNC_STATE_MIGRATION),
+    (4, "benchmark_custom_scan_count", BENCHMARK_SCAN_COUNT_MIGRATION),
 ]
 
 

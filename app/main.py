@@ -31,9 +31,28 @@ async def lifespan(app: FastAPI):
 
 
 def _ensure_settings() -> None:
-    """老库升级：补齐新增设置分区（不改已有值）。"""
-    from .db import execute, jdumps
+    """老库升级：补齐设置；仅在映射版本升级时替换内置 Provider 端点。"""
+    import copy
+    from .db import execute, jdumps, jloads, query_one
     for section, values in config.DEFAULT_SETTINGS.items():
+        if section == "datasource":
+            row = query_one("SELECT value_json FROM app_settings WHERE key='datasource'")
+            current = jloads(row["value_json"], {}) if row else {}
+            current_version = int(current.get("mappingVersion") or 0)
+            default_version = int(values.get("mappingVersion") or 0)
+            if row and current_version < default_version:
+                merged = copy.deepcopy(current)
+                merged["mappingVersion"] = default_version
+                merged["_note"] = values.get("_note", "")
+                providers = merged.setdefault("providers", {})
+                for name, default_provider in (values.get("providers") or {}).items():
+                    provider = providers.setdefault(name, {})
+                    provider["endpoints"] = copy.deepcopy(default_provider.get("endpoints") or {})
+                    for key in ("baseUrl", "auth", "rateLimit"):
+                        provider.setdefault(key, copy.deepcopy(default_provider.get(key)))
+                execute("UPDATE app_settings SET value_json=? WHERE key='datasource'",
+                        (jdumps(merged),))
+                continue
         execute("INSERT OR IGNORE INTO app_settings VALUES(?,?)",
                 (section, jdumps(values)))
 

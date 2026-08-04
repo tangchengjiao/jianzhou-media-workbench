@@ -64,6 +64,9 @@ def main() -> int:
         "内容雷达页面可渲染": radar_result.returncode == 0 and "内容雷达" in radar_dom,
         "对标账号入口可见": "添加对标账号" in radar_dom and "对标账号" in radar_dom,
         "添加账号表单可打开": add_result.returncode == 0 and "benchmarkLinkInput" in add_dom,
+        "扫描条数可自由填写": 'id="benchmarkScanCount"' in add_dom and 'type="number"' in add_dom,
+        "主流平台选项已加载": all(name in add_dom for name in ("视频号", "B站", "快手", "微博", "TikTok")),
+        "导航分组默认全部展开": 'nav-group collapsed' not in dom,
     }
     for name, passed in checks.items():
         print(f"  {'[PASS]' if passed else '[FAIL]'} {name}")

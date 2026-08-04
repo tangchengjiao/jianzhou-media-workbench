@@ -23,7 +23,7 @@
           <span class="nav-ico" v-html="icons.workbench"></span><span class="nav-label">工作总台</span>
         </button>
         <div class="nav-group" v-for="g in navGroups" :key="g.name" :class="{collapsed: collapsed[g.name]}">
-          <div class="nav-group-title" @click="collapsed[g.name]=!collapsed[g.name]">{{ g.name }}<span class="chev">▾</span></div>
+          <button type="button" class="nav-group-title" :aria-expanded="!collapsed[g.name]" @click="toggleGroup(g.name)">{{ g.name }}<span class="chev">▾</span></button>
           <div class="nav-list">
             <button class="nav-item" v-for="it in g.items" :key="it.page"
                     :class="{active: page===it.page}" @click="go(it.page)">

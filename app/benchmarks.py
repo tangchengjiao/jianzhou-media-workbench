@@ -18,6 +18,19 @@ def now() -> str:
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
+def normalize_scan_count(scan_range: str | None, scan_count: int | None = None) -> int:
+    if scan_count is not None:
+        value = int(scan_count)
+    elif scan_range == "all":
+        value = 200
+    else:
+        try:
+            value = int(scan_range or 30)
+        except (TypeError, ValueError):
+            value = 30
+    return min(max(value, 1), 500)
+
+
 def bm_score(w: dict) -> int:
     return int((w.get("likes") or 0) * 1 + (w.get("comments") or 0) * 3
                + (w.get("collects") or 0) * 4 + (w.get("shares") or 0) * 5)
@@ -113,7 +126,7 @@ def _scan_benchmark(bm: dict, emit_signals: bool) -> dict:
     bm_id = bm["id"]
     ds = get_datasource()
     overview = ds.account_overview(bm["uid"], bm["platform"])
-    limit = {"30": 30, "60": 60, "all": 200}.get(bm["scan_range"] or "30", 30)
+    limit = normalize_scan_count(bm.get("scan_range"), bm.get("scan_count"))
     vids = ds.account_videos(bm["uid"], bm["platform"], limit=limit)
     works = vids.get("works", [])
     if not works:
@@ -209,17 +222,23 @@ def _scan_benchmark(bm: dict, emit_signals: bool) -> dict:
 
 
 def add_benchmark(user_id: str, link: str, platform: str | None,
-                  scan_range: str = "30", note: str = "") -> dict:
+                  scan_range: str = "30", note: str = "",
+                  scan_count: int | None = None) -> dict:
     """解析链接 → 建档 → 首次扫描；配置缺失时绝不创建假账号。"""
     ds = get_datasource()
     if hasattr(ds, "require_configured"):
         ds.require_configured()
     resolved = ds.resolve_account(link, platform)
+    count = normalize_scan_count(scan_range, scan_count)
     existing = query_one(
         "SELECT id FROM benchmark_accounts WHERE user_id=? AND platform=? AND uid=?",
         (user_id, resolved["platform"], resolved["uid"]),
     )
     if existing:
+        execute(
+            "UPDATE benchmark_accounts SET link=?,scan_range=?,scan_count=?,note=? WHERE id=?",
+            (link.strip(), str(count), count, note, existing["id"]),
+        )
         try:
             result = scan_benchmark(existing["id"], emit_signals=True)
         except AppError as exc:
@@ -232,11 +251,11 @@ def add_benchmark(user_id: str, link: str, platform: str | None,
         "INSERT INTO benchmark_accounts("
         "id,user_id,platform,uid,link,name,avatar,bio,fans,likes_count,video_count,"
         "median_score,avg_score,post_gap_days,last_video_id,has_update,scan_range,note,"
-        "created_at,last_scan_at,sync_status,last_error_code,last_error_message) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "created_at,last_scan_at,sync_status,last_error_code,last_error_message,scan_count) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (bm_id, user_id, resolved["platform"], resolved["uid"], link.strip(),
          resolved.get("name", ""), "", "", 0, 0, 0, 0, 0, 0.0, None, 0,
-         scan_range, note, now(), None, "idle", None, None))
+         str(count), note, now(), None, "idle", None, None, count))
     try:
         result = scan_benchmark(bm_id, emit_signals=True)
     except AppError as exc:

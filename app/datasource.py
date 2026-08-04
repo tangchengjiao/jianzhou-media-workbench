@@ -16,6 +16,8 @@ import os
 import socket
 import time
 import urllib.parse
+from datetime import datetime
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -44,8 +46,17 @@ def json_path(obj, path: str):
     return cur
 
 
+def json_path_first(obj, paths):
+    candidates = paths if isinstance(paths, list) else [paths]
+    for path in candidates:
+        value = json_path(obj, path)
+        if value is not None:
+            return value
+    return None
+
+
 def map_obj(src: dict, mapping: dict) -> dict:
-    return {k: json_path(src, v) for k, v in (mapping or {}).items()}
+    return {k: json_path_first(src, v) for k, v in (mapping or {}).items()}
 
 
 def _text_value(value) -> str:
@@ -73,7 +84,14 @@ def _int_value(value) -> int:
     try:
         return int(float(str(value).replace(",", "")))
     except (TypeError, ValueError):
-        return 0
+        text = str(value).strip()
+        try:
+            return int(parsedate_to_datetime(text).timestamp())
+        except (TypeError, ValueError, OverflowError):
+            try:
+                return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+            except (TypeError, ValueError, OverflowError):
+                return 0
 
 
 # ================= 错误分类翻译层（HTTP → 用户可懂） =================
@@ -96,7 +114,35 @@ def classify_http(status: int, provider: str) -> AppError:
                     details={"http_status": status})
 
 
+def _authorization_header(value: str) -> str:
+    return value if value.lower().startswith("bearer ") else "Bearer " + value
+
+
 # ================= 平台识别与链接解析 =================
+
+PLATFORM_REGISTRY = {
+    "douyin": {"label": "抖音", "group": "国内主流", "id_label": "主页链接 / sec_user_id",
+                "placeholder": "粘贴抖音主页或分享链接，也可输入 sec_user_id"},
+    "xhs": {"label": "小红书", "group": "国内主流", "id_label": "主页链接 / user_id",
+            "placeholder": "粘贴小红书用户主页、分享链接或 user_id"},
+    "channels": {"label": "视频号", "group": "国内主流", "id_label": "finder username / 视频号ID",
+                 "placeholder": "输入 v2_…@finder 或 sph… 视频号ID"},
+    "bilibili": {"label": "B站", "group": "国内主流", "id_label": "空间链接 / UID",
+                 "placeholder": "粘贴 space.bilibili.com 主页链接或数字 UID"},
+    "kuaishou": {"label": "快手", "group": "国内主流", "id_label": "主页链接 / eid",
+                 "placeholder": "粘贴快手 profile 主页、分享链接或 eid"},
+    "weibo": {"label": "微博", "group": "国内主流", "id_label": "主页链接 / UID",
+              "placeholder": "粘贴微博用户主页链接或数字 UID"},
+    "tiktok": {"label": "TikTok", "group": "海外主流", "id_label": "主页链接 / 用户名 / secUid",
+               "placeholder": "粘贴 TikTok @用户名主页或输入 secUid"},
+}
+PLATFORM_LABELS = {key: value["label"] for key, value in PLATFORM_REGISTRY.items()}
+SUPPORTED_PLATFORMS = frozenset(PLATFORM_REGISTRY)
+
+
+def platform_catalog() -> list[dict]:
+    return [{"id": key, **value} for key, value in PLATFORM_REGISTRY.items()]
+
 
 def detect_platform(link: str) -> str | None:
     s = (link or "").lower()
@@ -106,13 +152,15 @@ def detect_platform(link: str) -> str | None:
         return "douyin"
     if any(k in s for k in ("bilibili", "b23.tv")):
         return "bilibili"
-    if any(k in s for k in ("channels", "weixin", "sph")):
+    if any(k in s for k in ("channels", "weixin", "finder", "sph")):
         return "channels"
+    if "kuaishou" in s:
+        return "kuaishou"
+    if any(k in s for k in ("weibo.com", "weibo.cn")):
+        return "weibo"
+    if "tiktok.com" in s:
+        return "tiktok"
     return None
-
-
-PLATFORM_LABELS = {"douyin": "抖音", "xhs": "小红书", "bilibili": "B站",
-                   "channels": "视频号", "gzh": "公众号"}
 
 
 # ================= Demo 数据源（确定性生成） =================
@@ -137,6 +185,9 @@ class DemoDatasource:
 
     def resolve_account(self, link: str, platform: str | None = None) -> dict:
         plat = platform or detect_platform(link) or "douyin"
+        if plat not in SUPPORTED_PLATFORMS:
+            raise AppError("PLATFORM_UNSUPPORTED", f"暂不支持平台：{plat}",
+                           stage="resolve_account", provider=self.name)
         if not link.strip():
             raise AppError("RESOLVE_FAILED", "请粘贴有效的主页链接或分享口令",
                            stage="resolve_account", provider=self.name)
@@ -163,7 +214,7 @@ class DemoDatasource:
         h = self._rng(uid)
         base = time.time()
         works = []
-        n = min(limit, 12 + h % 10)
+        n = min(max(int(limit), 1), 500)
         for i in range(n):
             seed = h + i * 7919
             likes = 800 + seed % 90000
@@ -271,14 +322,18 @@ class EndpointExecutor:
         headers = {}
         if auth.get("value"):
             if auth.get("type", "header") == "header":
-                headers[auth.get("field", "Authorization")] = auth["value"]
+                field = auth.get("field", "Authorization")
+                value = auth["value"]
+                if field.lower() == "authorization":
+                    value = _authorization_header(value)
+                headers[field] = value
             else:
                 qs.append(f"{auth.get('field', 'token')}={auth['value']}")
         if qs:
             url += ("&" if "?" in url else "?") + "&".join(qs)
         method = (ep.get("method") or "GET").upper()
         try:
-            with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+            with httpx.Client(timeout=float(ep.get("timeout", 45)), follow_redirects=False) as client:
                 if method == "POST" and ep.get("bodyMap"):
                     body = {k: (_subst_raw(v, args) if isinstance(v, str) else v)
                             for k, v in ep["bodyMap"].items()}
@@ -302,13 +357,13 @@ class EndpointExecutor:
             raise AppError("PROVIDER_PARSE_ERROR", "数据接口返回内容无法解析（非 JSON）",
                            stage="provider_call", provider=self.name)
         if ep.get("list"):
-            arr = json_path(body, ep["list"])
+            arr = json_path_first(body, ep["list"])
             data = [map_obj(it, ep.get("map")) for it in arr] if isinstance(arr, list) else []
             out = {"data": data}
             if ep.get("cursorPath"):
-                out["cursor"] = json_path(body, ep["cursorPath"])
+                out["cursor"] = json_path_first(body, ep["cursorPath"])
             if ep.get("hasMorePath"):
-                out["hasMore"] = json_path(body, ep["hasMorePath"])
+                out["hasMore"] = json_path_first(body, ep["hasMorePath"])
             return out
         return {"data": map_obj(body, ep.get("map") or {})}
 
@@ -316,7 +371,7 @@ class EndpointExecutor:
     def resolve_account(self, link: str, platform: str | None = None) -> dict:
         self._require()
         plat = platform or detect_platform(link) or "douyin"
-        if plat not in PLATFORM_LABELS:
+        if plat not in SUPPORTED_PLATFORMS:
             raise AppError("PLATFORM_UNSUPPORTED", f"暂不支持平台：{plat}",
                            stage="resolve_account", provider=self.name)
         # 抖音：短链跟随提取 sec_uid
@@ -333,6 +388,11 @@ class EndpointExecutor:
                 )
         elif plat == "xhs":
             uid = _resolve_xhs_uid(link) or uid
+            if "/" in uid:
+                resolved = self.call_endpoint(
+                    "resolveAccount", {"uid": uid, "platform": plat, "link": uid}
+                ).get("data") or {}
+                uid = _text_value(resolved.get("uid"))
             if "/" in uid or not uid:
                 raise AppError(
                     "RESOLVE_FAILED",
@@ -341,6 +401,50 @@ class EndpointExecutor:
                     stage="resolve_account", provider=self.name,
                     details={"platform": plat},
                 )
+        elif plat == "bilibili":
+            uid = _extract_uid(link, (r"space\.bilibili\.com/(\d+)", r"^\s*(\d+)\s*$")) or ""
+        elif plat == "kuaishou":
+            uid = _extract_uid(
+                link,
+                (r"/profile/([A-Za-z0-9_-]+)", r"/user/([A-Za-z0-9_-]+)",
+                 r"^\s*((?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]+)\s*$"),
+            ) or ""
+            if not uid:
+                resolved = self.call_endpoint(
+                    "resolveAccount", {"uid": link.strip(), "platform": plat, "link": link.strip()}
+                ).get("data") or {}
+                uid = _text_value(resolved.get("uid"))
+        elif plat == "weibo":
+            uid = _extract_uid(link, (r"weibo\.(?:com|cn)/u/(\d+)",
+                                      r"weibo\.(?:com|cn)/(\d+)", r"^\s*(\d+)\s*$")) or ""
+        elif plat == "channels":
+            raw = link.strip()
+            if "@finder" in raw:
+                uid = raw
+            elif raw.lower().startswith("sph"):
+                resolved = self.call_endpoint(
+                    "resolveAccount", {"uid": raw, "platform": plat, "link": raw}
+                ).get("data") or {}
+                uid = _text_value(resolved.get("uid"))
+            else:
+                uid = ""
+        elif plat == "tiktok":
+            raw = link.strip()
+            if raw.startswith("MS4"):
+                uid = raw
+            else:
+                username = _extract_uid(raw, (r"tiktok\.com/@([A-Za-z0-9._-]+)",
+                                              r"^@?([A-Za-z0-9._-]+)$")) or ""
+                resolved = self.call_endpoint(
+                    "resolveAccount", {"uid": username, "platform": plat, "link": raw}
+                ).get("data") or {}
+                uid = _text_value(resolved.get("uid"))
+        if not uid:
+            meta = PLATFORM_REGISTRY[plat]
+            raise AppError(
+                "RESOLVE_FAILED", f"未能识别{meta['label']}账号。请输入{meta['id_label']}。",
+                stage="resolve_account", provider=self.name, details={"platform": plat},
+            )
         return {"uid": uid, "platform": plat, "name": "", "link": link.strip()}
 
     def account_overview(self, uid: str, platform: str) -> dict:
@@ -352,14 +456,17 @@ class EndpointExecutor:
                 "video_count": _int_value(d.get("video_count"))}
 
     def account_videos(self, uid: str, platform: str, limit: int = 30) -> dict:
-        target = min(max(int(limit), 1), 200)
-        cursor = "0" if platform == "douyin" else ""
+        target = min(max(int(limit), 1), 500)
+        endpoint = self._pick_ep("accountVideos", platform) or {}
+        cursor = str(endpoint.get("startCursor", "0" if platform == "douyin" else ""))
+        page_size = max(1, int(endpoint.get("pageSize", 20)))
+        max_pages = min(50, max(2, (target + page_size - 1) // page_size + 1))
         raw_works: list[dict] = []
         seen: set[str] = set()
         has_more = True
         pages = 0
-        while len(raw_works) < target and has_more and pages < 10:
-            page_limit = min(20, target - len(raw_works))
+        while len(raw_works) < target and has_more and pages < max_pages:
+            page_limit = min(page_size, target - len(raw_works))
             r = self.call_endpoint(
                 "accountVideos",
                 {"uid": uid, "platform": platform, "limit": page_limit,
@@ -372,10 +479,19 @@ class EndpointExecutor:
                     raw_works.append(item)
                     seen.add(video_id)
             pages += 1
-            has_more = bool(r.get("hasMore"))
+            explicit_has_more = r.get("hasMore")
             next_cursor = r.get("cursor")
             if (next_cursor is None or next_cursor == "") and page:
                 next_cursor = page[-1].get("cursor")
+            if endpoint.get("cursorStep") and page:
+                next_cursor = str(int(cursor or 0) + int(endpoint["cursorStep"]))
+            stop_values = {str(v) for v in endpoint.get("cursorStopValues", [])}
+            if explicit_has_more is None:
+                has_more = bool(page) and len(page) >= min(page_size, page_limit)
+            else:
+                has_more = bool(explicit_has_more)
+            if str(next_cursor) in stop_values:
+                has_more = False
             if not has_more or next_cursor in (None, "", cursor):
                 break
             cursor = str(next_cursor)
@@ -417,6 +533,15 @@ def _subst_raw(s: str, args: dict) -> str:
     for k, v in args.items():
         out = out.replace("{" + k + "}", str(v))
     return out
+
+
+def _extract_uid(value: str, patterns: tuple[str, ...]) -> str | None:
+    import re
+    for pattern in patterns:
+        match = re.search(pattern, value or "", re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return None
 
 
 def _resolve_douyin_uid(link: str) -> str | None:
@@ -477,7 +602,7 @@ def _resolve_xhs_uid(link: str) -> str | None:
 def _allowed_provider_hosts() -> set[str]:
     configured = {h.strip().lower() for h in
                   os.environ.get("JIANZHOU_PROVIDER_HOSTS", "").split(",") if h.strip()}
-    return {"api.tikhub.io", *configured}
+    return {"api.tikhub.io", "api.tikhub.dev", *configured}
 
 
 def _validate_ip(address: str) -> None:
@@ -542,7 +667,9 @@ def get_datasource():
 
 def datasource_status() -> dict:
     if config.DEMO_MODE:
-        return {"mode": "demo", "configured": True, "provider": "demo_ds"}
+        return {"mode": "demo", "configured": True, "provider": "demo_ds",
+                "platforms": platform_catalog(), "max_scan_count": 500}
     ex = EndpointExecutor()
     return {"mode": "real", "configured": ex.is_configured(),
-            "provider": ex.active}
+            "provider": ex.active, "platforms": platform_catalog(),
+            "max_scan_count": 500}
