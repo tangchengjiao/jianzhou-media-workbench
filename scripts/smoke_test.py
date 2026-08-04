@@ -60,7 +60,9 @@ def main() -> int:
         r = c.get("/api/radar/signals")
         signals = r.json()["data"]
         check("雷达信号列表", len(signals) >= 5)
-        sig = next(s for s in signals if s["id"] == "SG-2031")
+        sig = next((s for s in signals
+                    if s["source_type"].startswith("对标") and "偷懒" not in s["title"]),
+                   signals[0])
 
         # 提取：先计划（不执行），计划含成本与默认不授权
         r = c.post("/api/extraction/plans", json={"signal_id": sig["id"]})
@@ -138,11 +140,11 @@ def main() -> int:
         r = c.post("/api/publications",
                    json={"task_id": tid, "platform": "抖音", "url": "https://example.com/smoke",
                          "final_title": "冒烟测试内容"})
-        check("发布登记 + 快照计划", r.status_code == 200)
+        check("发布登记接口可用（不以此证明快照调度已实现）", r.status_code == 200)
 
         # 复盘与规则
         r = c.get("/api/retro/report/P-201")
-        check("复盘报告（锁定预测 + 快照 + 结论）",
+        check("演示复盘样本可读取（不以此证明自动回收链路）",
               r.json()["data"]["prediction"]["locked"] == 1 and len(r.json()["data"]["snapshots"]) == 3)
         r = c.get("/api/rules/suggestions")
         sug = next(s for s in r.json()["data"] if s["status"] == "pending")
@@ -154,7 +156,11 @@ def main() -> int:
         # ---------- 3. 无兜底专项 ----------
         print("【3】无静默兜底专项")
         # 无字幕且未授权 ASR → 任务必须停在待决策，不得自动转写、不得成功
-        r = c.post("/api/extraction/plans", json={"signal_id": "SG-2034"})
+        no_caption_signal = next((s for s in signals if "偷懒" in s["title"]), None)
+        check("存在无原生字幕演示信号", no_caption_signal is not None)
+        if no_caption_signal is None:
+            raise AssertionError("演示种子缺少用于授权测试的无字幕信号")
+        r = c.post("/api/extraction/plans", json={"signal_id": no_caption_signal["id"]})
         plan2 = r.json()["data"]
         check("识别无原生字幕来源", plan2["caption_available"] is False)
         r = c.post("/api/extraction/jobs", json={"plan": plan2, "authorizations": {"asr_when_no_caption": False}})

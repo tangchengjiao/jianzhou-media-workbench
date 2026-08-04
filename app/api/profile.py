@@ -5,8 +5,10 @@ from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel
 
 from ..db import execute, jdumps, jloads, query, query_one
-from ..errors import not_found, state_invalid
+from ..errors import not_found, state_invalid, validation_failed
+from ..config import MAX_AUDIO_UPLOAD_BYTES
 from ..providers import get_llm_provider, get_stt_provider
+from ..ids import new_id
 from . import current_user_id, now, ok
 
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -139,7 +141,7 @@ class InterviewCreate(BaseModel):
 def create_interview(body: InterviewCreate):
     uid = current_user_id()
     llm = get_llm_provider()
-    sid = f"iv-{datetime.datetime.now().strftime('%H%M%S')}"
+    sid = new_id("iv")
     total = len(llm.INTERVIEW_SCRIPTS.get(body.topic,
                                           llm.INTERVIEW_SCRIPTS["完整建档"]))
     execute("INSERT INTO interview_sessions VALUES(?,?,?,?,?,?,?,?,?)",
@@ -186,7 +188,11 @@ async def add_audio_turn(sid: str, file: UploadFile = File(...)):
     s = query_one("SELECT * FROM interview_sessions WHERE id=?", (sid,))
     if not s:
         raise not_found("访谈会话", sid)
-    audio = await file.read()
+    audio = await file.read(MAX_AUDIO_UPLOAD_BYTES + 1)
+    if len(audio) > MAX_AUDIO_UPLOAD_BYTES:
+        raise validation_failed(
+            f"音频文件超过 {MAX_AUDIO_UPLOAD_BYTES // (1024 * 1024)} MB 限制"
+        )
     stt = get_stt_provider()
     result = stt.transcribe(audio, context=s["topic"])
     resp = add_turn(sid, TurnIn(text=result["text"]))
@@ -215,7 +221,7 @@ def finish_interview(sid: str):
     uid = current_user_id()
     ids = []
     for c in cands:
-        cid = f"fc-{datetime.datetime.now().strftime('%H%M%S')}-{len(ids)}"
+        cid = new_id("fc")
         execute("INSERT INTO profile_field_candidates VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (cid, uid, sid, c["field_path"], c["value"], c["inference_type"],
                  c["confidence"], c["evidence"], "pending", now()))

@@ -151,6 +151,7 @@
       return {
         tab: 'source', settings: {}, diag: null, errors: [], usage: null,
         ledger: [], traceQ: '', traceResult: null, saving: false,
+        secretDrafts: { source: '', llm: '' },
         tabs: [
           ['source', '数据来源'], ['voice', '语音模型'], ['llm', '大模型'],
           ['cost', '成本控制'], ['local', '本地数据'], ['diag', '系统诊断'],
@@ -179,7 +180,14 @@
       async save(section) {
         this.saving = true;
         try {
-          const r = await api.put('/api/settings', { section, values: this.settings[section] });
+          const values = { ...this.settings[section] };
+          delete values.tikhub_api_key_configured;
+          delete values.api_key_configured;
+          if (section === 'source' && this.secretDrafts.source) values.tikhub_api_key = this.secretDrafts.source;
+          if (section === 'llm' && this.secretDrafts.llm) values.api_key = this.secretDrafts.llm;
+          const r = await api.put('/api/settings', { section, values });
+          this.secretDrafts[section] = '';
+          await this.load();
           toast(r.note);
         } catch (e) { handleError(e); }
         this.saving = false;
@@ -208,7 +216,8 @@
           max_comments: '评论最多（条）', cache_days: '缓存有效期（天）',
           auto_backup: '自动备份', theme: '主题（light / dark）',
         };
-        return Object.keys(v).map((k) => ({ key: k, label: labels[k] || k, value: v[k] }));
+        return Object.keys(v).filter((k) => !k.endsWith('_configured'))
+          .map((k) => ({ key: k, label: labels[k] || k, value: v[k] }));
       },
     },
     template: `
@@ -228,6 +237,16 @@
           <div class="callout c-info" v-if="tab==='source'" style="margin-bottom:12px"><span>ⓘ</span><span>自动同步仅限公开元数据与快照；字幕收费接口、评论分页、媒体下载均需任务级确认。<template v-if="store.runtime.demo_mode"> 当前为<b>演示模式</b>，数据源为 demo_tikhub。</template></span></div>
           <div class="callout c-info" v-if="tab==='llm'" style="margin-bottom:12px"><span>ⓘ</span><span>所有写库型 LLM 输出必须通过 Schema 校验；校验失败 = 任务失败，禁止自动构造缺失字段。模型不可用时直接报错，<b>不会</b>自动切换。</span></div>
           <div class="grid g2">
+            <div class="field" v-if="tab==='source'">
+              <label>TikHub API Key（DPAPI 加密）</label>
+              <input class="input mono" type="password" v-model="secretDrafts.source"
+                :placeholder="settings.source && settings.source.tikhub_api_key_configured ? '已配置 · 留空表示不修改' : '尚未配置'">
+            </div>
+            <div class="field" v-if="tab==='llm'">
+              <label>LLM API Key（DPAPI 加密）</label>
+              <input class="input mono" type="password" v-model="secretDrafts.llm"
+                :placeholder="settings.llm && settings.llm.api_key_configured ? '已配置 · 留空表示不修改' : '尚未配置'">
+            </div>
             <div class="field" v-for="f in fieldItems(tab)" :key="f.key">
               <label>{{ f.label }}</label>
               <input class="input" :class="{mono: f.key.includes('key')||f.key.includes('base')}" v-model="settings[tab][f.key]">

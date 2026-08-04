@@ -4,9 +4,12 @@
 {success: false, error: {...}} 结构，携带 Trace ID。
 """
 import datetime
+import logging
 import uuid
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 
 def new_trace_id() -> str:
@@ -115,8 +118,10 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def unknown_error_handler(request: Request, exc: Exception):
         # 顶层捕获只用于可观测性边界：写日志、生成 Trace、不伪造业务成功
-        err = AppError("UNEXPECTED_ERROR", f"未预期错误：{exc}",
+        err = AppError("UNEXPECTED_ERROR", "服务处理请求时发生未预期错误，请使用 Trace ID 查询本地日志。",
                        stage="unknown", http_status=500)
+        logger.exception("Unhandled request error trace_id=%s path=%s",
+                         err.trace_id, request.url.path)
         _log_error(err)
         return JSONResponse(status_code=500,
                             content={"success": False, "error": err.to_dict()})

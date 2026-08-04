@@ -6,13 +6,23 @@
 - 配置了 Key 的真实调用走 httpx；任何失败原样抛 Typed Error，不切换适配器。
 """
 import datetime
+import ipaddress
+import json
+import os
+import socket
+import urllib.parse
 
 from . import config
 from .db import jdumps, query_one
 from .errors import AppError, config_missing_api_key, llm_unavailable
+from .secret_store import get_secret
 
 
 def get_setting(section: str, key: str, default: str = "") -> str:
+    if (section, key) == ("source", "tikhub_api_key"):
+        return get_secret("tikhub_api_key") or default
+    if (section, key) == ("llm", "api_key"):
+        return get_secret("llm_api_key") or default
     row = query_one("SELECT value_json FROM app_settings WHERE key=?", (section,))
     if not row:
         return default
@@ -223,6 +233,7 @@ class DemoLLMProvider:
 class RealLLMProvider:
     """真实 LLM 适配器：OpenAI 兼容协议。未配置即 fail-fast；失败分类翻译，不自动换模型。"""
     name = "openai_compatible"
+    INTERVIEW_SCRIPTS = DemoLLMProvider.INTERVIEW_SCRIPTS
 
     def __init__(self):
         self.api_key = get_setting("llm", "api_key")
@@ -231,12 +242,14 @@ class RealLLMProvider:
     def _require(self):
         if not self.api_key or not self.base_url:
             raise config_missing_api_key("大模型")
+        _validate_llm_url(self.base_url)
 
     def chat(self, model: str, system: str, user: str, max_tokens: int = 2000) -> str:
         import httpx
         self._require()
         try:
-            with httpx.Client(timeout=60.0) as client:
+            _validate_llm_url(self.base_url, resolve_dns=True)
+            with httpx.Client(timeout=60.0, follow_redirects=False) as client:
                 resp = client.post(
                     f"{self.base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {self.api_key}"},
@@ -259,7 +272,7 @@ class RealLLMProvider:
                            stage="llm_call", retryable=True, provider="openai_compatible")
         if resp.status_code != 200:
             raise AppError("LLM_PROVIDER_ERROR",
-                           f"大模型返回异常（HTTP {resp.status_code}）：{resp.text[:120]}",
+                           f"大模型返回异常（HTTP {resp.status_code}）",
                            stage="llm_call", retryable=True, provider="openai_compatible")
         data = resp.json()
         try:
@@ -267,6 +280,102 @@ class RealLLMProvider:
         except (KeyError, IndexError):
             raise AppError("LLM_OUTPUT_INVALID", "大模型返回结构不符合 OpenAI 协议",
                            stage="llm_parse", provider="openai_compatible")
+
+    def _json(self, model_key: str, system: str, user: str):
+        model = get_setting("llm", model_key)
+        text = self.chat(model, system + " 只输出合法 JSON，不要使用 Markdown 代码块。", user)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            raise AppError("LLM_OUTPUT_INVALID", "大模型输出不是合法 JSON，结果未写入。",
+                           stage="schema_validate", provider=self.name, retryable=True)
+
+    def parse_command(self, text: str) -> dict:
+        result = self._json(
+            "fast_model",
+            "你是工作台指令路由器，输出 intent、tools、reply、actions 四个字段。",
+            f"用户指令：{text}",
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("actions", []), list):
+            raise AppError("LLM_OUTPUT_INVALID", "指令解析结果不符合业务结构。",
+                           stage="schema_validate", provider=self.name)
+        return result
+
+    def interview_opening(self, topic: str) -> str:
+        script = self.INTERVIEW_SCRIPTS.get(topic, self.INTERVIEW_SCRIPTS["完整建档"])
+        return f"我们开始「{topic}」访谈。一次只问一个问题，你可以随时暂停。第一个问题：{script[0]}"
+
+    def interview_next(self, topic: str, idx: int, last_answer: str) -> str | None:
+        script = self.INTERVIEW_SCRIPTS.get(topic, self.INTERVIEW_SCRIPTS["完整建档"])
+        return None if idx >= len(script) else script[idx]
+
+    def interview_extract(self, topic: str, turns: list[dict]) -> list[dict]:
+        result = self._json(
+            "structured_model",
+            "从访谈中提取字段候选。输出 JSON 数组；每项含 field_path、value、inference_type、confidence、evidence。",
+            json.dumps({"topic": topic, "turns": turns}, ensure_ascii=False),
+        )
+        if not isinstance(result, list):
+            raise AppError("LLM_OUTPUT_INVALID", "访谈提取结果必须是数组。",
+                           stage="schema_validate", provider=self.name)
+        return result
+
+    def analyze(self, source_title: str) -> dict:
+        result = self._json(
+            "analysis_model", "拆解内容结构、受众问题、证据、可复用与不可复用部分。",
+            f"待拆解内容标题：{source_title}",
+        )
+        if not isinstance(result, dict):
+            raise AppError("LLM_OUTPUT_INVALID", "内容拆解结果必须是对象。",
+                           stage="schema_validate", provider=self.name)
+        return result
+
+    def diff_directions(self, title: str) -> list[dict]:
+        result = self._json(
+            "writing_model",
+            "为选题生成三个差异化方向。输出数组；每项含 type、title、note、cls。",
+            f"选题：{title}",
+        )
+        if not isinstance(result, list) or len(result) < 3:
+            raise AppError("LLM_OUTPUT_INVALID", "差异化方向不足三项。",
+                           stage="schema_validate", provider=self.name)
+        return result
+
+    def generate_draft(self, title: str, direction: str) -> str:
+        return self.chat(
+            get_setting("llm", "writing_model"),
+            "你是中文短视频文案编辑。不得虚构用户经历、数据或来源。",
+            f"标题：{title}\n差异化方向：{direction}\n生成一版可继续编辑的初稿。",
+        )
+
+
+def _validate_llm_url(url: str, resolve_dns: bool = False) -> None:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    allowed = {"api.openai.com"}
+    allowed.update(h.strip().lower() for h in
+                   os.environ.get("JIANZHOU_LLM_HOSTS", "").split(",") if h.strip())
+    if parsed.scheme != "https" or not host or parsed.username or parsed.password or host not in allowed:
+        raise AppError("LLM_URL_BLOCKED",
+                       "模型地址必须是允许列表中的 HTTPS 域名；自定义域名需通过 JIANZHOU_LLM_HOSTS 授权。",
+                       stage="provider_config", details={"host": host})
+    try:
+        addresses = [host] if ipaddress.ip_address(host) else []
+    except ValueError:
+        addresses = []
+    if resolve_dns:
+        try:
+            addresses = {item[4][0] for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)}
+        except socket.gaierror as exc:
+            raise AppError("LLM_PROVIDER_UNAVAILABLE", "模型域名无法解析。",
+                           stage="llm_call", retryable=True,
+                           details={"reason": exc.__class__.__name__})
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified):
+            raise AppError("LLM_URL_BLOCKED", "模型地址解析到了本机或私有网络。",
+                           stage="provider_config", details={"address": address})
 
 
 def get_llm_provider():

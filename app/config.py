@@ -5,15 +5,36 @@
 - 关闭后未配置真实 Key 的适配器将立即 fail-fast（CONFIG_MISSING_API_KEY）。
 """
 import os
+import sys
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+PACKAGE_DIR = Path(__file__).resolve().parent
+RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", PACKAGE_DIR.parent)).resolve()
+BASE_DIR = RESOURCE_DIR
+
+
+def _default_data_dir() -> Path:
+    override = os.environ.get("JIANZHOU_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    if getattr(sys, "frozen", False):
+        local_app_data = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if local_app_data:
+            return (Path(local_app_data) / "JianzhouMediaWorkbench").resolve()
+        return (Path.home() / ".jianzhou-media-workbench").resolve()
+    return (RESOURCE_DIR / "data").resolve()
+
+
+DATA_DIR = _default_data_dir()
 DB_PATH = DATA_DIR / "app.db"
 BACKUP_DIR = DATA_DIR / "backups"
-FRONTEND_DIR = BASE_DIR / "frontend"
+LOG_DIR = DATA_DIR / "logs"
+UPLOAD_DIR = DATA_DIR / "uploads"
+FRONTEND_DIR = RESOURCE_DIR / "frontend"
 
 DEMO_MODE = os.environ.get("JIANZHOU_DEMO", "1") == "1"
+MAX_IMPORT_UPLOAD_BYTES = int(os.environ.get("JIANZHOU_MAX_IMPORT_BYTES", str(10 * 1024 * 1024)))
+MAX_AUDIO_UPLOAD_BYTES = int(os.environ.get("JIANZHOU_MAX_AUDIO_BYTES", str(25 * 1024 * 1024)))
 
 APP_NAME = "见舟 · 自媒体运营工作台"
 APP_VERSION = "2.1.0"

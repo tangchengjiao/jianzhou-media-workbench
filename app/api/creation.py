@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from ..db import execute, jdumps, jloads, query, query_one
 from ..errors import not_found, prediction_locked, state_invalid
 from ..providers import get_llm_provider
+from ..ids import new_id
 from . import current_user_id, now, ok
 
 router = APIRouter(prefix="/creation", tags=["creation"])
@@ -50,7 +51,7 @@ class ProjectIn(BaseModel):
 @router.post("/projects")
 def create_project(body: ProjectIn):
     uid = current_user_id()
-    pid = f"CP-{datetime.datetime.now().strftime('%H%M%S')}"
+    pid = new_id("CP")
     ctx = {
         "packages": ["IP资料包 v3.2", "表达画像 v1.4", "规则经验包 v2.0", "运营周期包 Q3"],
         "sources": ["来源内容 ×1", "本人案例 ×2（咨询记录 #C-31 #C-42）"],

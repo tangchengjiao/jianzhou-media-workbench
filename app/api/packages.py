@@ -7,7 +7,9 @@ from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel
 
 from ..db import execute, jdumps, jloads, query, query_one
-from ..errors import not_found
+from ..errors import not_found, validation_failed
+from ..config import MAX_IMPORT_UPLOAD_BYTES
+from ..ids import new_id
 from . import current_user_id, now, ok
 
 router = APIRouter(tags=["packages"])
@@ -87,8 +89,12 @@ async def import_upload(file: UploadFile = File(...),
 
     CSV 真实解析预览；其他格式登记为待映射。部分失败必须明示。"""
     uid = current_user_id()
-    raw = await file.read()
-    bid = f"IMP-{datetime.datetime.now().strftime('%H%M%S')}"
+    raw = await file.read(MAX_IMPORT_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_IMPORT_UPLOAD_BYTES:
+        raise validation_failed(
+            f"导入文件超过 {MAX_IMPORT_UPLOAD_BYTES // (1024 * 1024)} MB 限制"
+        )
+    bid = new_id("IMP")
     filename = file.filename or "unnamed"
     errors, mapping, rows_total, rows_ok = [], [], 0, 0
 

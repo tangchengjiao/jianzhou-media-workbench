@@ -4,7 +4,12 @@
 
 from pathlib import Path
 
-ROOT = Path(SPECPATH).parent
+SPEC_LOCATION = Path(SPECPATH).resolve()
+SPEC_DIR = SPEC_LOCATION.parent if SPEC_LOCATION.is_file() else SPEC_LOCATION
+ROOT = SPEC_DIR.parent if SPEC_DIR.name == "packaging" else SPEC_DIR
+
+if not (ROOT / "app.py").is_file() or not (ROOT / "frontend").is_dir():
+    raise RuntimeError(f"无法解析项目根目录：{ROOT}")
 
 a = Analysis(
     [str(ROOT / "app.py")],
@@ -29,7 +34,12 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tests", "scripts"],
+    excludes=[
+        "tests", "scripts", "IPython", "jupyter", "notebook",
+        "matplotlib", "numpy", "pandas", "scipy", "sklearn", "sympy",
+        "torch", "tensorflow", "cv2", "PIL", "tkinter",
+        "PyQt5", "PyQt6", "PySide2", "PySide6",
+    ],
     noarchive=False,
 )
 

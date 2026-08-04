@@ -5,7 +5,8 @@ from pydantic import BaseModel
 from ..db import execute, jdumps, jloads, query, query_one
 from ..errors import not_found
 from ..jobs import create_job
-from . import current_user_id, ok
+from ..ids import new_id
+from . import current_user_id, now, ok
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -75,10 +76,9 @@ class PatternIn(BaseModel):
 
 @router.post("/patterns")
 def save_pattern(body: PatternIn):
-    import datetime
     uid = current_user_id()
-    pid = f"pt-{datetime.datetime.now().strftime('%H%M%S')}"
+    pid = new_id("pt")
     execute("INSERT INTO patterns VALUES(?,?,?,?,?,?,?,?,?)",
             (pid, uid, body.name, "draft", 1, "低", "待补充证据",
-             body.note or "从拆解保存的草稿模式卡", datetime.datetime.now().isoformat(timespec="seconds")))
+             body.note or "从拆解保存的草稿模式卡", now()))
     return ok({"id": pid, "note": "已保存为模式卡草稿，积累证据后可提升置信度"})

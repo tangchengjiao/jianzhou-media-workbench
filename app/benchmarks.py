@@ -11,6 +11,7 @@ import time
 from .datasource import PLATFORM_LABELS, get_datasource
 from .db import execute, jdumps, jloads, query, query_one
 from .errors import AppError, not_found
+from .ids import new_id
 
 
 def now() -> str:
@@ -95,8 +96,11 @@ def scan_benchmark(bm_id: str, emit_signals: bool = True) -> dict:
             updated += 1
         else:
             execute(
-                "INSERT INTO benchmark_works VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (f"bw-{int(time.time()*1000)}-{w['video_id'][-6:]}", bm_id, w["video_id"],
+                "INSERT INTO benchmark_works("
+                "id,bm_id,video_id,title,cover,url,create_time,plays,likes,comments,"
+                "collects,shares,score,is_hot,duration,first_seen_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (new_id("bw"), bm_id, w["video_id"],
                  w["title"], w.get("cover", ""), w.get("url", ""), w.get("create_time") or 0,
                  w["plays"], w["likes"], w["comments"], w["collects"], w["shares"],
                  bm_score(w), 0, w.get("duration") or 0, now()))
@@ -142,7 +146,7 @@ def scan_benchmark(bm_id: str, emit_signals: bool = True) -> dict:
         if new_works:
             execute(
                 "INSERT INTO inbox VALUES(?,?,?,?,?,?,?,?)",
-                (f"in-{int(time.time()*1000)}", uid, "benchmark_new",
+                (new_id("in"), uid, "benchmark_new",
                  f"「{name}」发现 {len(new_works)} 条新作品",
                  f"其中爆款候选 {sum(1 for w in new_works if bm_score(w) >= stats['median_score']*2)} 条 · 点击到雷达处理",
                  jdumps({"bm_id": bm_id}), 0, now()))
@@ -156,9 +160,12 @@ def add_benchmark(user_id: str, link: str, platform: str | None,
     """解析链接 → 建档 → 首次扫描。失败显式报错，不创建空壳账号。"""
     ds = get_datasource()
     resolved = ds.resolve_account(link, platform)
-    bm_id = f"bm-{int(time.time())}-{resolved['uid'][-6:]}"
+    bm_id = new_id("bm")
     execute(
-        "INSERT INTO benchmark_accounts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO benchmark_accounts("
+        "id,user_id,platform,uid,link,name,avatar,bio,fans,likes_count,video_count,"
+        "median_score,avg_score,post_gap_days,last_video_id,has_update,scan_range,note,"
+        "created_at,last_scan_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (bm_id, user_id, resolved["platform"], resolved["uid"], link.strip(),
          resolved.get("name", ""), "", "", 0, 0, 0, 0, 0, 0.0, None, 0,
          scan_range, note, now(), None))
@@ -222,7 +229,7 @@ def author_analysis(bm_id: str) -> dict:
         reading = _extract_json(text)
         engine = f"规则引擎 + LLM（{llm.name}）"
     result = {"metrics": metrics, "reading": reading, "engine": engine}
-    aid = f"aa-{int(time.time())}"
+    aid = new_id("aa")
     execute("INSERT INTO author_analyses VALUES(?,?,?,?,?)",
             (aid, bm_id, engine, jdumps(result), now()))
     return result

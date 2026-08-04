@@ -10,6 +10,7 @@ import json
 
 from .db import execute, jdumps, jloads, query, query_one
 from .errors import new_trace_id
+from .ids import new_id
 from .providers import get_llm_provider, get_social_provider
 
 _worker_task: asyncio.Task | None = None
@@ -23,7 +24,7 @@ def now() -> str:
 def create_job(user_id: str, task_type: str, input_data: dict,
                plan: dict | None = None, cost_est: float = 0.0,
                job_id: str | None = None) -> dict:
-    jid = job_id or f"J-{new_trace_id()[-6:]}"
+    jid = job_id or new_id("J")
     execute(
         "INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (jid, user_id, task_type, "QUEUED", "", 0, jdumps(input_data),
@@ -75,7 +76,7 @@ def _set(job_id: str, **fields) -> None:
 def record_usage(user_id: str, task: str, provider: str, endpoint: str,
                  model: str, cost: float) -> None:
     execute("INSERT INTO usage_ledger VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            (f"ul-{new_trace_id()[-6:]}", user_id, task, provider, endpoint,
+            (new_id("ul"), user_id, task, provider, endpoint,
              model, "1 次", cost, 0, 0, now()))
 
 

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from ..config import CONTENT_STATE_LABELS
 from ..db import execute, jdumps, jloads, query, query_one
 from ..errors import not_found, state_invalid
+from ..ids import new_id
 from . import current_user_id, now, ok, today
 
 router = APIRouter(tags=["planning"])
@@ -95,7 +96,7 @@ class TaskIn(BaseModel):
 @router.post("/planning/tasks")
 def create_task(body: TaskIn):
     uid = current_user_id()
-    tid = f"CT-{datetime.datetime.now().strftime('%H%M%S')}"
+    tid = new_id("CT")
     execute("INSERT INTO content_tasks VALUES(?,?,?,?,?,?,?,?,?,?)",
             (tid, uid, body.project_id, body.title, "CANDIDATE", body.platform,
              body.scheduled_date or today(), body.estimate_h, "mid", jdumps([])))
@@ -143,7 +144,7 @@ def register_publication(body: PublicationIn):
     task = query_one("SELECT * FROM content_tasks WHERE id=?", (body.task_id,))
     if not task:
         raise not_found("内容任务", body.task_id)
-    pid = f"P-{datetime.datetime.now().strftime('%H%M%S')}"
+    pid = new_id("P")
     execute("INSERT INTO publications VALUES(?,?,?,?,?,?,?,?,?,?)",
             (pid, uid, task["project_id"], body.task_id, body.platform, body.url,
              now(), body.final_title, body.note, None))

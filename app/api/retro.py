@@ -3,6 +3,7 @@ from fastapi import APIRouter
 
 from ..db import execute, jdumps, jloads, query, query_one
 from ..errors import not_found, state_invalid
+from ..ids import new_id
 from . import current_user_id, ok
 
 router = APIRouter(tags=["retro"])
@@ -73,8 +74,7 @@ def approve_suggestion(sid: str):
     if s["status"] != "pending":
         raise state_invalid(f"规则建议 {sid} 已处理（{s['status']}）")
     execute("UPDATE rule_suggestions SET status='accepted' WHERE id=?", (sid,))
-    import datetime
-    rid = f"R-{datetime.datetime.now().strftime('%H%M%S')}"
+    rid = new_id("R")
     execute("INSERT INTO rules VALUES(?,?,?,?,?,?,?,?,?)",
             (rid, s["user_id"], s["rule_text"], "verified", s["scope"],
              s["confidence"], 1, "由建议确认生效", "v2.1"))

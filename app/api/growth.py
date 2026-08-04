@@ -6,6 +6,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from ..db import execute, query
+from ..ids import new_id
 from . import current_user_id, ok
 
 router = APIRouter(prefix="/growth", tags=["growth"])
@@ -26,7 +27,7 @@ class EventIn(BaseModel):
 @router.post("/events")
 def add_event(body: EventIn):
     uid = current_user_id()
-    eid = f"ge-{datetime.datetime.now().strftime('%H%M%S')}"
+    eid = new_id("ge")
     execute("INSERT INTO growth_events VALUES(?,?,?,?,?,?)",
             (eid, uid, datetime.date.today().isoformat(), body.title,
              body.desc, "normal"))

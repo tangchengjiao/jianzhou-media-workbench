@@ -10,14 +10,19 @@
   未配置即 CONFIG_MISSING_API_KEY（fail-fast，绝不返回假数据）。
 """
 import hashlib
+import ipaddress
 import json
+import os
+import socket
 import time
+import urllib.parse
 
 import httpx
 
 from . import config
 from .db import jloads, query_one
 from .errors import AppError, config_missing_api_key
+from .secret_store import get_secret
 
 
 # ================= 极简 JSONPath：支持 $.a.b[0].c =================
@@ -183,14 +188,21 @@ class EndpointExecutor:
     @staticmethod
     def _load_config() -> dict:
         row = query_one("SELECT value_json FROM app_settings WHERE key='datasource'")
-        return jloads(row["value_json"], {}) if row else {}
+        cfg = jloads(row["value_json"], {}) if row else {}
+        active = cfg.get("active", "")
+        provider = (cfg.get("providers") or {}).get(active) or {}
+        if active == "tikhub":
+            provider.setdefault("auth", {})["value"] = get_secret("tikhub_api_key")
+        return cfg
 
     def is_configured(self) -> bool:
-        return bool(self.pconf.get("baseUrl"))
+        auth = self.pconf.get("auth") or {}
+        return bool(self.pconf.get("baseUrl") and auth.get("value"))
 
     def _require(self):
-        if not self.pconf.get("baseUrl"):
+        if not self.is_configured():
             raise config_missing_api_key(f"数据源（{self.active}）")
+        _validate_provider_url(self.pconf["baseUrl"])
 
     def _throttle(self):
         rpm = (self.pconf.get("rateLimit") or {}).get("rpm", 30)
@@ -219,6 +231,7 @@ class EndpointExecutor:
                            stage="endpoint_mapping", provider=self.name)
         self._throttle()
         url = self.pconf["baseUrl"].rstrip("/") + _subst(ep["path"], args)
+        _validate_provider_url(url, resolve_dns=True)
         qs = []
         for k, v in (ep.get("params") or {}).items():
             qs.append(f"{k}={_subst(v, args)}")
@@ -233,7 +246,7 @@ class EndpointExecutor:
             url += ("&" if "?" in url else "?") + "&".join(qs)
         method = (ep.get("method") or "GET").upper()
         try:
-            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+            with httpx.Client(timeout=30.0, follow_redirects=False) as client:
                 if method == "POST" and ep.get("bodyMap"):
                     body = {k: (_subst_raw(v, args) if isinstance(v, str) else v)
                             for k, v in ep["bodyMap"].items()}
@@ -244,6 +257,11 @@ class EndpointExecutor:
             raise AppError("PROVIDER_NETWORK_ERROR",
                            f"数据接口连接失败：{e.__class__.__name__}。请检查网络或接口地址。",
                            stage="provider_call", retryable=True, provider=self.name)
+        if 300 <= resp.status_code < 400:
+            raise AppError("PROVIDER_REDIRECT_BLOCKED",
+                           "数据接口返回了重定向；为防止请求被转发到未授权地址，调用已停止。",
+                           stage="provider_call", provider=self.name,
+                           details={"http_status": resp.status_code})
         if resp.status_code != 200:
             raise classify_http(resp.status_code, self.name)
         try:
@@ -310,7 +328,6 @@ class EndpointExecutor:
 
 
 def _subst(s: str, args: dict) -> str:
-    import urllib.parse
     out = str(s)
     for k, v in args.items():
         out = out.replace("{" + k + "}", urllib.parse.quote(str(v), safe=""))
@@ -334,10 +351,11 @@ def _resolve_douyin_uid(link: str) -> str | None:
             with httpx.Client(timeout=12.0, follow_redirects=False) as client:
                 cur, hops = link, 0
                 while hops < 6:
+                    _validate_social_redirect(cur)
                     r = client.get(cur)
                     loc = r.headers.get("location")
                     if 300 <= r.status_code < 400 and loc:
-                        cur = loc if loc.startswith("http") else cur
+                        cur = urllib.parse.urljoin(cur, loc)
                         hops += 1
                         m = re.search(r"/user/([A-Za-z0-9_\-]+)", cur)
                         if m:
@@ -347,6 +365,54 @@ def _resolve_douyin_uid(link: str) -> str | None:
         except httpx.HTTPError:
                 return None
     return None
+
+
+def _allowed_provider_hosts() -> set[str]:
+    configured = {h.strip().lower() for h in
+                  os.environ.get("JIANZHOU_PROVIDER_HOSTS", "").split(",") if h.strip()}
+    return {"api.tikhub.io", *configured}
+
+
+def _validate_ip(address: str) -> None:
+    ip = ipaddress.ip_address(address)
+    if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+            or ip.is_multicast or ip.is_unspecified):
+        raise AppError("PROVIDER_URL_BLOCKED", "数据源地址解析到了本机或私有网络，调用已阻止。",
+                       stage="provider_config", details={"address": address})
+
+
+def _validate_provider_url(url: str, resolve_dns: bool = False) -> None:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host or parsed.username or parsed.password:
+        raise AppError("PROVIDER_URL_BLOCKED", "数据源必须使用不含用户名密码的 HTTPS 地址。",
+                       stage="provider_config")
+    if host not in _allowed_provider_hosts():
+        raise AppError("PROVIDER_URL_BLOCKED",
+                       "该数据源域名不在允许列表。可通过 JIANZHOU_PROVIDER_HOSTS 显式添加可信域名。",
+                       stage="provider_config", details={"host": host})
+    try:
+        _validate_ip(host)
+    except ValueError:
+        pass
+    if resolve_dns:
+        try:
+            addresses = {item[4][0] for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)}
+        except socket.gaierror as exc:
+            raise AppError("PROVIDER_NETWORK_ERROR", "数据源域名无法解析。",
+                           stage="provider_call", retryable=True,
+                           details={"reason": exc.__class__.__name__})
+        for address in addresses:
+            _validate_ip(address)
+
+
+def _validate_social_redirect(url: str) -> None:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    allowed = ("douyin.com", "iesdouyin.com", "dy.tt")
+    if parsed.scheme != "https" or not any(host == d or host.endswith("." + d) for d in allowed):
+        raise AppError("SOCIAL_REDIRECT_BLOCKED", "短链跳转到了非抖音域名，解析已停止。",
+                       stage="resolve_account", details={"host": host})
 
 
 # ================= 统一入口 =================

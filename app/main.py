@@ -17,7 +17,11 @@ from .seed import seed_if_empty
 async def lifespan(app: FastAPI):
     init_db()
     _ensure_settings()
-    seed_if_empty()
+    from .api.settings import migrate_legacy_secrets
+    from .db import transaction
+    migrate_legacy_secrets()
+    with transaction():
+        seed_if_empty()
     start_worker()
     from . import scheduler
     scheduler.start()
@@ -40,9 +44,36 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
     app.include_router(api_router)
 
+    @app.middleware("http")
+    async def security_headers(request, call_next):
+        origin = request.headers.get("origin", "")
+        if origin and origin not in {
+            "http://127.0.0.1:8741", "http://localhost:8741",
+            f"http://127.0.0.1:{request.url.port or 80}",
+            f"http://localhost:{request.url.port or 80}",
+        }:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=403, content={
+                "success": False,
+                "error": {"code": "ORIGIN_NOT_ALLOWED", "message": "请求来源不受信任"},
+            })
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "same-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'self'; frame-ancestors 'none'"
+        )
+        return response
+
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "demo_mode": config.DEMO_MODE}
+        from .db import query_one
+        version = query_one("PRAGMA user_version")
+        return {"ok": True, "demo_mode": config.DEMO_MODE,
+                "schema_version": next(iter(version.values())) if version else 0}
 
     # 前端静态资源（免构建 Vue3）
     app.mount("/assets", StaticFiles(directory=config.FRONTEND_DIR / "assets"),

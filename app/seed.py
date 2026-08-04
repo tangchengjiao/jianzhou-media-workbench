@@ -30,6 +30,13 @@ def uid(prefix: str) -> str:
 def seed_if_empty() -> None:
     if not table_empty("users"):
         return
+    from . import config
+    if not config.DEMO_MODE:
+        execute("INSERT INTO users VALUES(?,?,?,?)",
+                ("u-local", "本地创作者", "舟", ts(0)))
+        execute("INSERT OR REPLACE INTO app_settings VALUES('runtime',?)",
+                (jdumps({"active_user": "u-local"}),))
+        return
     _seed_users()
     _seed_packages()
     _seed_profile()
@@ -127,6 +134,10 @@ def _seed_profile() -> None:
             ("pv-3.0", "u-zhou", "v3.0", jdumps({**content, "pillars": content["pillars"][:3]}),
              "首次语音建档", "访谈 #1 · 完整转写 42 轮 · 字段证据 38 条", d(-78), 0))
 
+    # 先创建证据来源会话，再创建引用该会话的字段候选。
+    execute("INSERT INTO interview_sessions VALUES(?,?,?,?,?,?,?,?,?)",
+            ("iv-8", "u-zhou", "表达风格", "voice", "PAUSED", 5, 12, ts(-3), ts(-2)))
+
     cands = [
         ("fc-1", "禁用表达", "「家人们」「宝子们」", "explicit", 0.95,
          "访谈 #8 · 第 3 轮 · “我从来不说家人们，太油了。”", "pending"),
@@ -138,8 +149,6 @@ def _seed_profile() -> None:
                 (cid, "u-zhou", "iv-8", path, val, itype, conf, ev, status, ts(-2)))
 
     # 暂停中的访谈会话 #8
-    execute("INSERT INTO interview_sessions VALUES(?,?,?,?,?,?,?,?,?)",
-            ("iv-8", "u-zhou", "表达风格", "voice", "PAUSED", 5, 12, ts(-3), ts(-2)))
     turns = [
         (1, "assistant", "我们聊聊表达风格。你写完一条稿子，通读时最先改的是什么？"),
         (2, "user", "先砍形容词。我稿子初稿特别啰嗦，第一遍基本都在删。"),
@@ -226,7 +235,7 @@ def _seed_signals_and_contents() -> None:
     top_signal = globals().get("_DEMO_TOP_SIGNAL", "")
     top_work = globals().get("_DEMO_TOP_WORK", "")
     execute("INSERT INTO source_contents VALUES(?,?,?,?,?,?,?,?,?,?)",
-            ("SC-118", "u-zhou", top_signal, "为什么你的汇报总被打断", "抖音",
+            ("SC-118", "u-zhou", top_signal or None, "为什么你的汇报总被打断", "抖音",
              "@运营第6年", f"https://example.com/video/{top_work}", "metadata_only",
              jdumps({"metadata": {"exists": True},
                      "benchmark_work_id": top_work}), ts(-1)))
@@ -361,14 +370,14 @@ def _seed_planning() -> None:
                 (tid, "u-zhou", proj, title, status, platform, date_, est, pri,
                  jdumps(badges)))
 
-    # 发布记录 + 快照（副业）
+    # 发布前判断必须先于引用它的发布记录写入。
+    execute("INSERT INTO predictions VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            ("pred-201", None, "互动率 > 均值 · 验证反焦虑立场", "高于均值 1.2–1.8×",
+             0.62, "评论区真实痛点", "开头可能太冲",
+             "反鸡汤立场在副业话题有效", "开头可能太冲，但立场要坚持。", 1, ts(-7, 18)))
     execute("INSERT INTO publications VALUES(?,?,?,?,?,?,?,?,?,?)",
             ("P-201", "u-zhou", None, "CT-9", "抖音", "https://example.com/pub/201",
              ts(-7, 19), "我劝你别急着做副业", "", "pred-201"))
-    execute("INSERT INTO predictions VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-            ("pred-201", "", "互动率 > 均值 · 验证反焦虑立场", "高于均值 1.2–1.8×",
-             0.62, "评论区真实痛点", "开头可能太冲",
-             "反鸡汤立场在副业话题有效", "开头可能太冲，但立场要坚持。", 1, ts(-7, 18)))
     snaps = [("T+1", 12000, 820, 96, 640, -6), ("T+3", 31000, 2400, 288, 1980, -4),
              ("T+7", 58000, 5100, 402, 4814, 0)]
     for tn, plays, likes, comments, collects, off in snaps:

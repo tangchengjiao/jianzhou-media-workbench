@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from ..db import execute, jdumps, jloads, query, query_one
 from ..errors import not_found
 from ..jobs import create_job
+from ..ids import new_id
 from . import current_user_id, ok
 
 router = APIRouter(tags=["accounts"])
@@ -40,8 +41,7 @@ class AccountIn(BaseModel):
 @router.post("/accounts")
 def add_account(body: AccountIn):
     uid = current_user_id()
-    import datetime
-    aid = f"acc-{datetime.datetime.now().strftime('%H%M%S')}"
+    aid = new_id("acc")
     execute("INSERT INTO accounts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (aid, uid, body.platform, body.handle, "own", "ok",
              body.sync_frequency, None, 0, "demo_tikhub", "新添加 · 尚未同步",
