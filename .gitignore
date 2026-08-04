@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Runtime data and secrets
+data/*
+!data/.gitkeep
+*.db
+*.db-shm
+*.db-wal
+*.log
+.env
+.env.*
+!.env.example
+
+# Packaging and build output
+build/
+dist/
+*.spec.bak
+
+# Editors and local agent state
+.idea/
+.vscode/
+.workbuddy/
+
+# OS files
+.DS_Store
+Thumbs.db

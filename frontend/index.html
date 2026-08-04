@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>见舟 · 自媒体运营工作台</title>
+<link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+<div id="app" v-cloak>
+  <div class="app">
+    <!-- ============ 侧边栏 ============ -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">舟</div>
+        <div>
+          <div class="brand-name">见舟工作台</div>
+          <div class="brand-sub">本地优先 · v2.1</div>
+        </div>
+      </div>
+      <div class="sb-scroll">
+        <button class="nav-item" :class="{active: page==='workbench'}" @click="go('workbench')">
+          <span class="nav-ico" v-html="icons.workbench"></span><span class="nav-label">工作总台</span>
+        </button>
+        <div class="nav-group" v-for="g in navGroups" :key="g.name" :class="{collapsed: collapsed[g.name]}">
+          <div class="nav-group-title" @click="collapsed[g.name]=!collapsed[g.name]">{{ g.name }}<span class="chev">▾</span></div>
+          <div class="nav-list">
+            <button class="nav-item" v-for="it in g.items" :key="it.page"
+                    :class="{active: page===it.page}" @click="go(it.page)">
+              <span class="nav-ico" v-html="icons[it.page]"></span><span class="nav-label">{{ it.label }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="sb-side">
+        <button class="nav-item" :class="{active: page==='packages'}" @click="go('packages')">
+          <span class="nav-ico" v-html="icons.packages"></span><span class="nav-label">资料中心</span>
+        </button>
+        <button class="nav-item" :class="{active: page==='settings'}" @click="go('settings')">
+          <span class="nav-ico" v-html="icons.settings"></span><span class="nav-label">系统设置</span>
+        </button>
+      </div>
+      <div class="sb-foot">
+        <div class="local-badge"><span class="dot-live"></span>本地模式 · 数据保存在本机</div>
+      </div>
+    </aside>
+
+    <!-- ============ 主区域 ============ -->
+    <div class="main">
+      <header class="topbar">
+        <div class="tb-title">{{ pageTitle }}</div>
+        <div class="tb-right">
+          <span class="chip-state demo" v-if="runtime.demo_mode" title="当前为显式演示模式：外部数据来自内置演示 Provider，可在系统设置中关闭">◆ 演示数据</span>
+          <span class="chip-state warn" v-if="status.sync_alerts && status.sync_alerts.length"
+                :title="status.sync_alerts[0].note" @click="go('account')" style="cursor:pointer">● 同步异常 {{ status.sync_alerts.length }}</span>
+          <span class="chip-state" v-if="usage">今日成本 <b class="mono">¥{{ usage.today.toFixed(2) }}</b> / ¥{{ usage.daily_budget }}</span>
+          <span class="chip-state">{{ dateLabel }}</span>
+          <button class="theme-toggle" @click="toggleTheme" :title="theme==='light'?'切换到深色模式':'切换到浅色模式'">
+            <span v-if="theme==='light'">☾</span><span v-else>☀</span>
+          </button>
+          <div class="avatar" title="切换创作者将关闭当前数据包组合" @click="go('packages')" style="cursor:pointer">{{ avatarChar }}</div>
+        </div>
+      </header>
+      <main class="content">
+        <component :is="currentPageComponent" :key="page"></component>
+      </main>
+    </div>
+  </div>
+
+  <!-- ============ 全局弹层：执行计划确认 ============ -->
+  <plan-modal></plan-modal>
+  <error-modal></error-modal>
+  <trace-modal></trace-modal>
+  <rule-modal></rule-modal>
+  <switch-modal></switch-modal>
+  <publish-modal></publish-modal>
+  <div class="toast-root" id="toastRoot"></div>
+</div>
+
+<script src="/assets/js/vue.global.prod.js"></script>
+<script src="/assets/js/api.js"></script>
+<script src="/assets/js/store.js"></script>
+<script src="/assets/js/components.js"></script>
+<script src="/assets/js/pages/base.js"></script>
+<script src="/assets/js/pages/insight.js"></script>
+<script src="/assets/js/pages/create.js"></script>
+<script src="/assets/js/pages/review.js"></script>
+<script src="/assets/js/pages/system.js"></script>
+<script src="/assets/js/app.js"></script>
+</body>
+</html>
