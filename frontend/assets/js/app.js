@@ -110,5 +110,19 @@
   app.component('SwitchModal', SwitchModal);
   app.component('PublishModal', PublishModal);
 
-  app.mount('#app');
+  try {
+    app.mount('#app');
+  } catch (error) {
+    console.error('Jianzhou UI failed to mount', error);
+    const root = document.getElementById('app');
+    if (root) {
+      root.removeAttribute('v-cloak');
+      root.innerHTML = `
+        <main style="max-width:720px;margin:12vh auto;padding:28px;font-family:system-ui;color:#272622">
+          <h1 style="font-size:24px;margin:0 0 12px">界面加载失败</h1>
+          <p style="line-height:1.7;color:#6b6962">本地服务已经启动，但前端没有成功挂载。请关闭窗口后重新启动；如果问题仍然存在，请到系统日志中查看错误。</p>
+          <p style="font-size:13px;color:#8a877f">日志位置：%LOCALAPPDATA%/JianzhouMediaWorkbench/logs/app.log</p>
+        </main>`;
+    }
+  }
 })();

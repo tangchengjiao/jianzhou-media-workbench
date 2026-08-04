@@ -62,7 +62,9 @@ def create_app() -> FastAPI:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            # The no-build Vue distribution compiles in-page templates at runtime.
+            # Remove unsafe-eval after Phase 5 moves templates to a build-time compiler.
+            "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https:; connect-src 'self'; object-src 'none'; "
             "base-uri 'self'; frame-ancestors 'none'"
         )

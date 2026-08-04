@@ -51,9 +51,12 @@ python -m unittest discover -s tests -v
 
 ```powershell
 python scripts/smoke_test.py
+python scripts/browser_smoke_test.py
 ```
 
-`scripts/smoke_test.py` 只验证演示流程，不是 Real 模式或正式发布验收。
+`scripts/smoke_test.py` 验证演示 API 流程；`scripts/browser_smoke_test.py` 使用本机
+Chrome/Edge 验证 Vue 已实际挂载，用于阻止“HTML 可访问但界面白板”的回归。
+两者都不代表 Real Provider 已完成验收。
 
 ## 打包
 

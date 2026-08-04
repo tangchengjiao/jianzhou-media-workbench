@@ -31,6 +31,14 @@
 | 演示业务冒烟 | 38/38 通过 |
 | PyInstaller 干净环境构建 | 通过，EXE 约 16.2 MB |
 | EXE 实际启动 | healthz、首页、静态 JS、外部数据库与日志均通过 |
+| 浏览器真实渲染 | Chrome Headless 验证 Vue 挂载、`v-cloak` 移除、工作总台可见 |
+
+## 发行回归修复
+
+首次 Phase 1 EXE 虽然通过 HTTP 与静态资源检查，但 Vue 免构建版本需要在浏览器中
+运行时编译模板，过严的 CSP 禁止了该动作，导致 `v-cloak` 永久隐藏页面并显示白板。
+现已为本机页面的 `script-src` 增加 `unsafe-eval`，同时增加 Vue 挂载失败可见错误页和
+浏览器级冒烟测试。Phase 5 改为构建期模板编译后，应移除 `unsafe-eval`。
 
 ## 数据迁移
 
