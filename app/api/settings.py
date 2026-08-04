@@ -2,9 +2,10 @@
 import json
 import shutil
 import copy
+import urllib.parse
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import config
 from ..db import execute, jdumps, jloads, query, query_one
@@ -120,16 +121,52 @@ def put_settings(body: SettingsIn):
             if not isinstance(value, str):
                 raise validation_failed("datasource.providers.tikhub.auth.value 必须是字符串")
             secret_updates.append(("tikhub_api_key", value))
+    if body.section == "execution":
+        if incoming.get("mode") not in {"demo", "real"}:
+            raise validation_failed("运行模式只能是 demo 或 real")
     _validate_shape(incoming, template, body.section)
     old_row = query_one("SELECT value_json FROM app_settings WHERE key=?",
                         (body.section,))
     old = jloads(old_row["value_json"], {}) if old_row else {}
     merged = _deep_merge(old, incoming)
+    if body.section == "llm":
+        _validate_llm_values(merged)
     for secret_name, secret_value in secret_updates:
         set_secret(secret_name, secret_value)
     execute("INSERT OR REPLACE INTO app_settings VALUES(?,?)",
             (body.section, jdumps(merged)))
-    return ok({"note": "设置已保存；密钥由当前 Windows 用户的 DPAPI 加密，且不会通过 API 回传"})
+    if body.section == "execution":
+        config.set_demo_mode(merged.get("mode") != "real")
+    return ok({"note": "设置已保存；密钥由当前 Windows 用户的 DPAPI 加密，且不会通过 API 回传",
+               "demo_mode": config.DEMO_MODE})
+
+
+def _validate_llm_values(values: dict) -> None:
+    from ..providers import _validate_llm_url
+    protocol = values.get("protocol", "openai_compatible")
+    if protocol != "openai_compatible":
+        raise validation_failed("当前只支持 OpenAI Compatible 协议")
+    auth_mode = values.get("auth_mode", "bearer")
+    if auth_mode not in {"bearer", "none"}:
+        raise validation_failed("模型鉴权方式只能是 bearer 或 none")
+    base_url = str(values.get("api_base") or "").strip().rstrip("/")
+    if not base_url:
+        raise validation_failed("请填写模型 API Base URL")
+    parsed = urllib.parse.urlparse(base_url)
+    if not parsed.path or parsed.path == "/":
+        base_url += "/v1"
+    values["api_base"] = base_url
+    try:
+        _validate_llm_url(base_url, allow_private=bool(values.get("allow_private_network")))
+    except Exception as exc:
+        if getattr(exc, "code", None):
+            raise validation_failed(exc.message)
+        raise
+    for key in ("fast_model", "analysis_model", "writing_model", "structured_model"):
+        model = str(values.get(key) or "").strip()
+        if not model or len(model) > 200:
+            raise validation_failed(f"{key} 必须填写有效模型名称")
+        values[key] = model
 
 
 @router.get("/settings/runtime")
@@ -157,8 +194,11 @@ def diagnostics():
     except OSError:
         writable = False
     usage = shutil.disk_usage(str(data_dir.anchor or "."))
-    tikhub_key = query_one("SELECT value_json FROM app_settings WHERE key='source'")
     has_key = has_secret("tikhub_api_key")
+    llm_row = query_one("SELECT value_json FROM app_settings WHERE key='llm'")
+    llm_values = jloads(llm_row["value_json"], {}) if llm_row else {}
+    llm_ready = bool(llm_values.get("api_base") and llm_values.get("fast_model")
+                     and (llm_values.get("auth_mode") == "none" or has_secret("llm_api_key")))
     foreign_keys = query_one("PRAGMA foreign_keys")["foreign_keys"] == 1
     fk_errors = query("PRAGMA foreign_key_check")
     integrity = query_one("PRAGMA quick_check")["quick_check"]
@@ -168,9 +208,10 @@ def diagnostics():
              "status": "ok" if (config.DEMO_MODE or has_key) else "err",
              "detail": "demo_tikhub · 演示数据" if config.DEMO_MODE
                        else ("已配置 Key" if has_key else "CONFIG_MISSING_API_KEY")},
-            {"name": "LLM（演示模式）" if config.DEMO_MODE else "LLM 连通性",
-             "status": "ok" if config.DEMO_MODE else "err",
-             "detail": "demo_llm · 演示数据" if config.DEMO_MODE else "未配置真实模型"},
+            {"name": "LLM（演示模式）" if config.DEMO_MODE else "LLM 配置",
+             "status": "ok" if (config.DEMO_MODE or llm_ready) else "err",
+             "detail": "demo_llm · 演示数据" if config.DEMO_MODE
+                       else ("配置完整 · 请手动测试连接" if llm_ready else "配置不完整")},
             {"name": "本地 Whisper（演示）" if config.DEMO_MODE else "本地 Whisper",
              "status": "ok" if config.DEMO_MODE else "err",
              "detail": "demo_faster_whisper_small" if config.DEMO_MODE else "未安装或尚未验证"},
@@ -235,14 +276,42 @@ def ds_status():
     return ok(datasource_status())
 
 
+class DatasourceCheckIn(BaseModel):
+    link: str = Field(min_length=1, max_length=2048)
+    platform: str = "douyin"
+
+
 @router.post("/datasource/check")
-def ds_check():
-    """连通性检查：真实调用一次账号资料接口，不通过即显式报错。"""
-    from ..datasource import get_datasource
-    ds = get_datasource()
-    ov = ds.account_overview("check_probe", "douyin")
+def ds_check(body: DatasourceCheckIn):
+    """Use the user's public account as an explicit, potentially billable probe."""
+    from ..datasource import EndpointExecutor, SUPPORTED_PLATFORMS
+    if body.platform not in SUPPORTED_PLATFORMS:
+        raise validation_failed(f"暂不支持平台：{body.platform}")
+    ds = EndpointExecutor()
+    account = ds.resolve_account(body.link, body.platform)
+    overview = ds.account_overview(account["uid"], account["platform"])
     return ok({"provider": ds.name, "reachable": True,
-               "note": f"数据源连通正常（{ds.name}）"})
+               "platform": account["platform"], "account_name": overview.get("name"),
+               "note": f"真实数据源连通正常（{ds.name}）"})
+
+
+class LLMCheckIn(BaseModel):
+    model: str | None = Field(default=None, max_length=200)
+
+
+@router.get("/llm/models")
+def llm_models():
+    from ..providers import RealLLMProvider
+    models = RealLLMProvider().list_models()
+    return ok({"models": models, "count": len(models),
+               "note": f"已读取 {len(models)} 个模型；你仍可手动填写未列出的模型名称。"})
+
+
+@router.post("/llm/check")
+def llm_check(body: LLMCheckIn):
+    from ..providers import RealLLMProvider
+    result = RealLLMProvider().check_connection(body.model)
+    return ok({**result, "note": f"模型 {result['model']} 连接与最小生成测试通过。"})
 
 
 @router.get("/scheduler")

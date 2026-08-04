@@ -278,7 +278,7 @@ def author_analysis(bm_id: str) -> dict:
     top = works[:5]
     hot = [w for w in works if w["is_hot"]]
     from . import config as _cfg
-    from .providers import get_llm_provider
+    from .providers import get_llm_provider, get_setting
     metrics = {
         "works_analyzed": len(works),
         "hot_ratio": round(len(hot) / len(works) * 100, 1) if works else 0,
@@ -311,7 +311,8 @@ def author_analysis(bm_id: str) -> dict:
             f"发布间隔 {bm['post_gap_days']} 天\n"
             f"高分作品标题：{'、'.join(metrics['top_titles'])}"
         )
-        text = llm.chat("analysis_model", "你是内容操盘手，只输出合法 JSON。", prompt)
+        text = llm.chat(get_setting("llm", "analysis_model"),
+                        "你是内容操盘手，只输出合法 JSON。", prompt)
         reading = _extract_json(text)
         engine = f"规则引擎 + LLM（{llm.name}）"
     result = {"metrics": metrics, "reading": reading, "engine": engine}

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>系统设置改造前后对比</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: #eeeae3; color: #26231f; font: 16px/1.5 system-ui, sans-serif; }
+  h1 { margin: 0 0 18px; font-size: 22px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  figure { margin: 0; padding: 12px; background: white; border: 1px solid #d9d3ca; border-radius: 10px; }
+  figcaption { margin-bottom: 10px; font-weight: 700; }
+  img { display: block; width: 100%; height: auto; border: 1px solid #e5e0d8; }
+</style>
+<h1>系统设置：改造前字段存储页 vs 新版 EXE 运行控制面</h1>
+<main>
+  <figure><figcaption>改造前：缺少运行模式、自定义模型服务与验证入口</figcaption><img src="01-改造前-数据来源设置.png"></figure>
+  <figure><figcaption>改造后：Provider、鉴权、任务模型绑定和真实测试</figcaption><img src="05-新版EXE-大模型配置.png"></figure>
+</main>
+</html>

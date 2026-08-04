@@ -33,6 +33,12 @@ UPLOAD_DIR = DATA_DIR / "uploads"
 FRONTEND_DIR = RESOURCE_DIR / "frontend"
 
 DEMO_MODE = os.environ.get("JIANZHOU_DEMO", "1") == "1"
+
+
+def set_demo_mode(enabled: bool) -> None:
+    """Update the effective runtime mode without requiring an app restart."""
+    global DEMO_MODE
+    DEMO_MODE = bool(enabled)
 MAX_IMPORT_UPLOAD_BYTES = int(os.environ.get("JIANZHOU_MAX_IMPORT_BYTES", str(10 * 1024 * 1024)))
 MAX_AUDIO_UPLOAD_BYTES = int(os.environ.get("JIANZHOU_MAX_AUDIO_BYTES", str(25 * 1024 * 1024)))
 
@@ -41,6 +47,9 @@ APP_VERSION = "2.1.0"
 
 # 成本预算默认值（可在系统设置中修改）
 DEFAULT_SETTINGS = {
+    "execution": {
+        "mode": "demo" if DEMO_MODE else "real",
+    },
     "source": {
         "tikhub_api_key": "",
         "sync_frequency": "每 6 小时 · 关键词每日 · 快照 T+1/3/7",
@@ -55,12 +64,16 @@ DEFAULT_SETTINGS = {
         "hot_words": "TikHub, 归因翻转, 林小舟, 向上管理",
     },
     "llm": {
+        "configVersion": 2,
+        "protocol": "openai_compatible",
+        "auth_mode": "bearer",
+        "allow_private_network": False,
         "fast_model": "gpt-4o-mini",
-        "analysis_model": "claude-sonnet-4",
-        "writing_model": "claude-sonnet-4",
+        "analysis_model": "gpt-4o-mini",
+        "writing_model": "gpt-4o-mini",
         "structured_model": "gpt-4o-mini",
         "embedding_model": "本地 bge-m3",
-        "api_base": "",
+        "api_base": "https://api.openai.com/v1",
         "api_key": "",
     },
     "cost": {

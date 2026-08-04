@@ -52,9 +52,11 @@ def main() -> int:
         result = dump_dom(browser, BASE_URL, root / "home")
         radar_result = dump_dom(browser, f"{base}/#/radar", root / "radar")
         add_result = dump_dom(browser, f"{base}/?radar=add#/radar", root / "add")
+        settings_result = dump_dom(browser, f"{base}/?settings=llm#/settings", root / "settings")
     dom = result.stdout
     radar_dom = radar_result.stdout
     add_dom = add_result.stdout
+    settings_dom = settings_result.stdout
     checks = {
         "浏览器正常退出": result.returncode == 0,
         "Vue 已移除 v-cloak": "v-cloak" not in dom,
@@ -67,6 +69,10 @@ def main() -> int:
         "扫描条数可自由填写": 'id="benchmarkScanCount"' in add_dom and 'type="number"' in add_dom,
         "主流平台选项已加载": all(name in add_dom for name in ("视频号", "B站", "快手", "微博", "TikTok")),
         "导航分组默认全部展开": 'nav-group collapsed' not in dom,
+        "模型设置支持自定义 URL": settings_result.returncode == 0 and "API Base URL" in settings_dom,
+        "模型名称可按任务绑定": all(label in settings_dom for label in (
+            "快速分类 / 指令路由", "深度分析模型", "写作模型", "结构化抽取模型")),
+        "模型列表与真实测试入口可见": "保存并读取模型列表" in settings_dom and "测试快速模型" in settings_dom,
     }
     for name, passed in checks.items():
         print(f"  {'[PASS]' if passed else '[FAIL]'} {name}")

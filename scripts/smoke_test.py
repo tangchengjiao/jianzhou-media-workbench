@@ -52,6 +52,22 @@ def main() -> int:
         check("前端首页可访问", r.status_code == 200 and "见舟" in r.text)
         r = c.get("/api/workbench/status")
         check("工作总台状态聚合", r.status_code == 200 and r.json()["data"]["cycle"]["weekly_target"] == 4)
+        settings = c.get("/api/settings").json()["data"]
+        check("模型 URL 与任务模型设置可读取",
+              settings["llm"]["api_base"].endswith("/v1") and "execution" in settings)
+        r = c.put("/api/settings", json={"section": "execution", "values": {"mode": "real"}})
+        real_now = c.get("/api/settings/runtime").json()["data"]["demo_mode"] is False
+        c.put("/api/settings", json={"section": "execution", "values": {"mode": "demo"}})
+        check("运行模式可即时切换并持久化", r.status_code == 200 and real_now)
+        llm_values = dict(settings["llm"])
+        llm_values.update({"auth_mode": "none", "api_base": "https://models.example.com",
+                           "fast_model": "smoke-fast", "analysis_model": "smoke-analysis",
+                           "writing_model": "smoke-writing", "structured_model": "smoke-json"})
+        r = c.put("/api/settings", json={"section": "llm", "values": llm_values})
+        saved_llm = c.get("/api/settings").json()["data"]["llm"]
+        check("自定义 Provider 与模型名称真实保存",
+              r.status_code == 200 and saved_llm["api_base"] == "https://models.example.com/v1"
+              and saved_llm["writing_model"] == "smoke-writing")
 
         # ---------- 2. 完整业务链路 ----------
         print("【2】完整链路：雷达 → 提取 → 拆解 → 创作 → 计划 → 发布 → 复盘 → 规则")

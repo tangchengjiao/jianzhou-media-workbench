@@ -149,16 +149,23 @@
   window.PageSettings = {
     data() {
       return {
-        tab: 'source', settings: {}, diag: null, errors: [], usage: null,
+        tab: 'execution', settings: {}, diag: null, errors: [], usage: null,
         ledger: [], traceQ: '', traceResult: null, saving: false,
+        testingSource: false, testingLlm: false, loadingModels: false,
+        sourceTest: { platform: 'douyin', link: '' },
+        sourceResult: null, llmResult: null, availableModels: [],
         secretDrafts: { source: '', llm: '' },
         tabs: [
-          ['source', '数据来源'], ['voice', '语音模型'], ['llm', '大模型'],
+          ['execution', '运行模式'], ['source', '数据来源'], ['llm', '大模型'], ['voice', '语音模型'],
           ['cost', '成本控制'], ['local', '本地数据'], ['diag', '系统诊断'],
         ],
       };
     },
-    async mounted() { await this.load(); },
+    async mounted() {
+      await this.load();
+      const requested = new URLSearchParams(location.search).get('settings');
+      if (this.tabs.some((item) => item[0] === requested)) await this.switchTab(requested);
+    },
     methods: {
       async load() {
         try {
@@ -177,7 +184,7 @@
         this.tab = t;
         if (t === 'diag') await this.loadDiag();
       },
-      async save(section) {
+      async save(section, showToast = true) {
         this.saving = true;
         try {
           const values = { ...this.settings[section] };
@@ -186,11 +193,57 @@
           if (section === 'source' && this.secretDrafts.source) values.tikhub_api_key = this.secretDrafts.source;
           if (section === 'llm' && this.secretDrafts.llm) values.api_key = this.secretDrafts.llm;
           const r = await api.put('/api/settings', { section, values });
+          if (section === 'source' && this.settings.datasource) {
+            await api.put('/api/settings', { section: 'datasource', values: this.settings.datasource });
+          }
           this.secretDrafts[section] = '';
           await this.load();
-          toast(r.note);
+          if (section === 'execution') store.runtime.demo_mode = r.demo_mode;
+          if (showToast) toast(r.note);
+          this.saving = false;
+          return true;
         } catch (e) { handleError(e); }
         this.saving = false;
+        return false;
+      },
+      async setMode(mode) {
+        this.settings.execution.mode = mode;
+        if (await this.save('execution', false)) {
+          toast(mode === 'real' ? '已切换到真实模式；新的外部任务将使用已配置 Provider。' : '已切换到演示模式。');
+        }
+      },
+      async testSource() {
+        if (!this.sourceTest.link.trim()) return toast('请先填写一个公开账号主页或账号 ID', 'warn');
+        if (!(await this.save('source', false))) return;
+        this.testingSource = true; this.sourceResult = null;
+        try {
+          this.sourceResult = await api.post('/api/datasource/check', {
+            platform: this.sourceTest.platform, link: this.sourceTest.link.trim(),
+          });
+          toast(this.sourceResult.note);
+        } catch (e) { handleError(e); }
+        this.testingSource = false;
+      },
+      async loadModels() {
+        if (!(await this.save('llm', false))) return;
+        this.loadingModels = true; this.llmResult = null;
+        try {
+          const result = await api.get('/api/llm/models');
+          this.availableModels = result.models || [];
+          this.llmResult = { ok: true, note: result.note };
+          toast(result.note);
+        } catch (e) { handleError(e); }
+        this.loadingModels = false;
+      },
+      async testLlm() {
+        if (!(await this.save('llm', false))) return;
+        this.testingLlm = true; this.llmResult = null;
+        try {
+          const result = await api.post('/api/llm/check', { model: this.settings.llm.fast_model });
+          this.llmResult = { ok: true, note: result.note, model: result.model };
+          toast(result.note);
+        } catch (e) { handleError(e); }
+        this.testingLlm = false;
       },
       async queryTrace() {
         if (!this.traceQ.trim()) return;
@@ -227,37 +280,74 @@
       </div>
 
       <div class="tabs">
-        <button class="tab" v-for="t in tabs" :key="t[0]" :class="{active:tab===t[0]}" @click="switchTab(t[0])">{{ t[1] }}
+        <button class="tab" v-for="t in tabs" :key="t[0]" :class="{active:tab===t[0]}" :aria-pressed="tab===t[0]" @click="switchTab(t[0])">{{ t[1] }}
           <span class="badge b-err" v-if="t[0]==='diag' && errors.length" style="margin-left:2px">{{ errors.length }}</span></button>
       </div>
 
-      <div class="card section-gap" v-if="tab!=='diag'">
+      <div class="settings-mode-grid section-gap" v-if="tab==='execution' && settings.execution">
+        <button type="button" class="settings-mode-card" :class="{active:settings.execution.mode==='demo'}" :aria-pressed="settings.execution.mode==='demo'" @click="setMode('demo')">
+          <span class="settings-mode-check">{{ settings.execution.mode==='demo' ? '✓' : '' }}</span><b>演示模式</b><small>使用明确标记的内置数据，不产生外部调用费用。</small>
+        </button>
+        <button type="button" class="settings-mode-card" :class="{active:settings.execution.mode==='real'}" :aria-pressed="settings.execution.mode==='real'" @click="setMode('real')">
+          <span class="settings-mode-check">{{ settings.execution.mode==='real' ? '✓' : '' }}</span><b>真实模式</b><small>立即使用你保存的 TikHub 与模型 Provider；配置缺失时显式失败。</small>
+        </button>
+        <div class="card settings-mode-summary"><div class="card-body">
+          <div class="settings-section-title">当前生效状态 <span class="badge" :class="store.runtime.demo_mode?'b-vio':'b-ok'">{{ store.runtime.demo_mode ? '演示' : '真实' }}</span></div>
+          <p>切换只影响之后发起的任务，不删除已有数据。真实模式下不会自动回退到演示结果。</p>
+          <div class="settings-readiness"><span>数据源 Key <b>{{ settings.source && settings.source.tikhub_api_key_configured ? '已保存' : '未保存' }}</b></span><span>模型 Key <b>{{ settings.llm && (settings.llm.auth_mode==='none'||settings.llm.api_key_configured) ? '已就绪' : '未保存' }}</b></span><span>模型地址 <b>{{ settings.llm && settings.llm.api_base ? '已填写' : '未填写' }}</b></span></div>
+        </div></div>
+      </div>
+
+      <div class="card section-gap settings-provider-card" v-if="tab==='source' && settings.source && settings.datasource">
         <div class="card-body">
-          <div class="callout c-warn" v-if="tab==='voice'" style="margin-bottom:12px"><span>⚠</span><span>语音模式失败<b>不会</b>静默切换为文字并继续写档案；适配器失败也<b>不会</b>自动调用另一个适配器。</span></div>
-          <div class="callout c-info" v-if="tab==='source'" style="margin-bottom:12px"><span>ⓘ</span><span>自动同步仅限公开元数据与快照；字幕收费接口、评论分页、媒体下载均需任务级确认。<template v-if="store.runtime.demo_mode"> 当前为<b>演示模式</b>，数据源为 demo_tikhub。</template></span></div>
-          <div class="callout c-info" v-if="tab==='llm'" style="margin-bottom:12px"><span>ⓘ</span><span>所有写库型 LLM 输出必须通过 Schema 校验；校验失败 = 任务失败，禁止自动构造缺失字段。模型不可用时直接报错，<b>不会</b>自动切换。</span></div>
+          <div class="settings-section-head"><div><div class="settings-section-title">TikHub 数据源</div><p>保存后使用公开账号做一次真实连通测试；测试可能产生接口费用。</p></div><span class="badge" :class="settings.source.tikhub_api_key_configured?'b-ok':'b-warn'">{{ settings.source.tikhub_api_key_configured ? 'Key 已保存' : '待配置' }}</span></div>
           <div class="grid g2">
-            <div class="field" v-if="tab==='source'">
-              <label>TikHub API Key（DPAPI 加密）</label>
-              <input class="input mono" type="password" v-model="secretDrafts.source"
-                :placeholder="settings.source && settings.source.tikhub_api_key_configured ? '已配置 · 留空表示不修改' : '尚未配置'">
-            </div>
-            <div class="field" v-if="tab==='llm'">
-              <label>LLM API Key（DPAPI 加密）</label>
-              <input class="input mono" type="password" v-model="secretDrafts.llm"
-                :placeholder="settings.llm && settings.llm.api_key_configured ? '已配置 · 留空表示不修改' : '尚未配置'">
-            </div>
-            <div class="field" v-for="f in fieldItems(tab)" :key="f.key">
-              <label>{{ f.label }}</label>
-              <input class="input" :class="{mono: f.key.includes('key')||f.key.includes('base')}" v-model="settings[tab][f.key]">
-            </div>
+            <label class="field"><span>API Base URL</span><input class="input mono" v-model="settings.datasource.providers.tikhub.baseUrl" placeholder="https://api.tikhub.io"><small>大陆网络可使用 https://api.tikhub.dev</small></label>
+            <label class="field"><span>TikHub API Key（DPAPI 加密）</span><input class="input mono" type="password" v-model="secretDrafts.source" :placeholder="settings.source.tikhub_api_key_configured ? '已配置 · 留空表示不修改' : '粘贴 API Key'"><small>密钥不会通过设置接口回传。</small></label>
+            <label class="field"><span>测试平台</span><select class="input" v-model="sourceTest.platform"><option value="douyin">抖音</option><option value="xhs">小红书</option><option value="bilibili">B站</option><option value="kuaishou">快手</option><option value="weibo">微博</option><option value="channels">视频号</option><option value="tiktok">TikTok</option></select></label>
+            <label class="field"><span>公开账号主页 / 账号 ID</span><input class="input" v-model="sourceTest.link" placeholder="用于真实解析和账号资料测试"><small>不会再使用无效的 check_probe。</small></label>
           </div>
-          <div style="display:flex;gap:8px;align-items:center">
-            <button class="btn btn-pri" :disabled="saving" @click="save(tab)">保存本分区</button>
-            <span class="mini-note" v-if="tab==='cost' && usage">今日已用 ¥{{ usage.today.toFixed(2) }} / ¥{{ usage.daily_budget }} · 本月 ¥{{ usage.month.toFixed(2) }} / ¥{{ usage.monthly_budget }}（已用量只读展示）</span>
-          </div>
+          <div class="settings-actions"><button class="btn btn-pri" :disabled="saving" @click="save('source')">保存数据源</button><button class="btn" :disabled="testingSource||saving" @click="testSource">{{ testingSource ? '正在测试…' : '保存并真实测试' }}</button></div>
+          <div class="callout c-ok" role="status" aria-live="polite" v-if="sourceResult"><span>✓</span><span>{{ sourceResult.note }}<template v-if="sourceResult.account_name"> · 账号：{{ sourceResult.account_name }}</template></span></div>
         </div>
       </div>
+
+      <div class="card section-gap settings-provider-card" v-if="tab==='llm' && settings.llm">
+        <div class="card-body">
+          <div class="settings-section-head"><div><div class="settings-section-title">OpenAI Compatible 模型服务</div><p>支持 OpenAI、兼容中转服务和显式授权的本地服务。模型列表不可用时仍可手填名称。</p></div><span class="badge" :class="settings.llm.api_key_configured||settings.llm.auth_mode==='none'?'b-ok':'b-warn'">{{ settings.llm.api_key_configured||settings.llm.auth_mode==='none' ? '鉴权已就绪' : '待配置 Key' }}</span></div>
+          <div class="callout c-info"><span>ⓘ</span><span>保存配置本身不调用模型；“读取模型列表”和“最小生成测试”会发起真实请求，后者可能计费。</span></div>
+          <div class="grid g2 settings-config-grid">
+            <label class="field"><span>协议</span><select class="input" v-model="settings.llm.protocol"><option value="openai_compatible">OpenAI Compatible · Chat Completions</option></select></label>
+            <label class="field"><span>鉴权方式</span><select class="input" v-model="settings.llm.auth_mode"><option value="bearer">Bearer API Key</option><option value="none">无需鉴权（本地服务）</option></select></label>
+            <label class="field"><span>API Base URL</span><input class="input mono" v-model="settings.llm.api_base" placeholder="https://api.openai.com/v1"><small>填写到 /v1；只填域名时系统会自动补齐。</small></label>
+            <label class="field"><span>API Key（DPAPI 加密）</span><input class="input mono" type="password" :disabled="settings.llm.auth_mode==='none'" v-model="secretDrafts.llm" :placeholder="settings.llm.api_key_configured ? '已配置 · 留空表示不修改' : '粘贴模型 API Key'"><small>{{ settings.llm.auth_mode==='none' ? '当前服务不发送 Authorization 请求头。' : '仅由当前 Windows 用户解密。' }}</small></label>
+          </div>
+          <label class="settings-private-toggle"><input type="checkbox" v-model="settings.llm.allow_private_network"><span><b>允许访问本机/私有网络模型服务</b><small>仅在使用 Ollama、LM Studio 等可信本地服务时开启；开启后允许 HTTP。</small></span></label>
+          <div class="settings-model-heading"><div><b>任务模型绑定</b><span>每个任务可以使用不同的模型名称</span></div><span v-if="availableModels.length">已读取 {{ availableModels.length }} 个模型</span></div>
+          <datalist id="llmModelOptions"><option v-for="model in availableModels" :value="model"></option></datalist>
+          <div class="settings-model-grid">
+            <label class="field"><span>快速分类 / 指令路由</span><input class="input mono" list="llmModelOptions" v-model="settings.llm.fast_model"><small>工作总台指令解析</small></label>
+            <label class="field"><span>深度分析模型</span><input class="input mono" list="llmModelOptions" v-model="settings.llm.analysis_model"><small>内容拆解、对标作者分析</small></label>
+            <label class="field"><span>写作模型</span><input class="input mono" list="llmModelOptions" v-model="settings.llm.writing_model"><small>方向、提纲、初稿</small></label>
+            <label class="field"><span>结构化抽取模型</span><input class="input mono" list="llmModelOptions" v-model="settings.llm.structured_model"><small>访谈字段与 JSON 输出</small></label>
+            <label class="field settings-field-pending"><span>Embedding 模型 <em>尚未接入</em></span><input class="input mono" v-model="settings.llm.embedding_model"><small>当前仅保存名称，不会伪装成已调用。</small></label>
+          </div>
+          <div class="settings-actions"><button class="btn btn-pri" :disabled="saving" @click="save('llm')">保存模型配置</button><button class="btn" :disabled="loadingModels||saving" @click="loadModels">{{ loadingModels ? '正在读取…' : '保存并读取模型列表' }}</button><button class="btn" :disabled="testingLlm||saving" @click="testLlm">{{ testingLlm ? '正在生成…' : '测试快速模型' }}</button></div>
+          <div class="callout c-ok" role="status" aria-live="polite" v-if="llmResult && llmResult.ok"><span>✓</span><span>{{ llmResult.note }}</span></div>
+        </div>
+      </div>
+
+      <div class="card section-gap" v-if="tab==='voice' && settings.voice"><div class="card-body">
+        <div class="settings-section-head"><div><div class="settings-section-title">语音模型</div><p>当前版本尚未接通真实 STT/TTS Provider；以下语言与热词会保存，但不会被包装成“已生效”。</p></div><span class="badge b-warn">PARTIAL</span></div>
+        <div class="callout c-warn"><span>⚠</span><span>真实模式下语音转写会明确返回 STT_PROVIDER_UNAVAILABLE，不会静默换成文字输入或演示结果。</span></div>
+        <div class="grid g2"><label class="field"><span>STT Provider</span><input class="input" disabled v-model="settings.voice.stt_provider"><small>本地 faster-whisper 安装器尚未实现。</small></label><label class="field"><span>TTS Provider</span><input class="input" disabled v-model="settings.voice.tts_provider"><small>TTS 调用链尚未实现。</small></label><label class="field"><span>转写语言</span><input class="input" v-model="settings.voice.language"></label><label class="field"><span>热词词典</span><input class="input" v-model="settings.voice.hot_words"></label></div>
+        <button class="btn btn-pri" :disabled="saving" @click="save('voice')">保存语言与热词</button>
+      </div></div>
+
+      <div class="card section-gap" v-if="['cost','local'].includes(tab) && settings[tab]"><div class="card-body">
+        <div class="grid g2"><div class="field" v-for="f in fieldItems(tab)" :key="f.key"><label>{{ f.label }}</label><input class="input" v-model="settings[tab][f.key]"></div></div>
+        <div class="settings-actions"><button class="btn btn-pri" :disabled="saving" @click="save(tab)">保存本分区</button><span class="mini-note" v-if="tab==='cost' && usage">今日已用 ¥{{ usage.today.toFixed(2) }} / ¥{{ usage.daily_budget }} · 本月 ¥{{ usage.month.toFixed(2) }} / ¥{{ usage.monthly_budget }}</span></div>
+      </div></div>
 
       <template v-if="tab==='diag'">
         <div class="card section-gap"><div class="card-body" style="padding-top:14px">

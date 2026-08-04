@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from ..db import execute, jdumps, jloads, query, query_one
 from ..errors import not_found, prediction_locked, state_invalid
 from ..providers import get_llm_provider
+from .. import config
 from ..ids import new_id
 from . import current_user_id, now, ok
 
@@ -78,15 +79,14 @@ class DirectionIn(BaseModel):
 
 @router.post("/projects/{pid}/direction")
 def choose_direction(pid: str, body: DirectionIn):
-    query_one("SELECT id FROM creation_projects WHERE id=?", (pid,)) \
+    project = query_one("SELECT id,title FROM creation_projects WHERE id=?", (pid,)) \
         or (_ for _ in ()).throw(not_found("创作项目", pid))
     llm = get_llm_provider()
-    outline = ["① 钩子：被打断是顺序问题", "② 我的咨询翻车案例",
-               "③ 正确顺序：结论-风险-诉求", "④ 对照改写演示", "⑤ 清单 + 模板 CTA"]
+    outline = llm.generate_outline(project["title"], body.direction)
     execute("UPDATE creation_projects SET diff_strategy=?, outline_json=?,"
             " status='OUTLINING' WHERE id=?",
             (body.direction, jdumps(outline), pid))
-    return ok({"outline": outline, "note": "提纲已按新方向生成（演示）"})
+    return ok({"outline": outline, "note": "提纲已按新方向生成" + ("（演示）" if config.DEMO_MODE else "")})
 
 
 @router.post("/projects/{pid}/draft")
@@ -97,7 +97,8 @@ def generate_draft(pid: str):
     ver = (query_one("SELECT COALESCE(MAX(version_no),0) m FROM draft_versions"
                      " WHERE project_id=?", (pid,))["m"] or 0) + 1
     execute("INSERT INTO draft_versions VALUES(?,?,?,?,?,?,?)",
-            (f"dv-{pid}-{ver}", pid, ver, "抖音口播", content, "初稿生成（演示）", now()))
+            (f"dv-{pid}-{ver}", pid, ver, "抖音口播",
+             content, "初稿生成（演示）" if config.DEMO_MODE else "初稿生成（真实模型）", now()))
     execute("UPDATE creation_projects SET status='DRAFTING' WHERE id=?", (pid,))
     checks = {
         "style_match": {"label": "风格适配 · 表达画像 v1.4", "status": "ok", "value": "匹配 92%"},

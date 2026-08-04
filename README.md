@@ -4,8 +4,8 @@
 
 ## 当前状态
 
-- `JIANZHOU_DEMO=1`：使用明确标识的确定性演示 Provider，用于产品流程演示和开发测试。
-- `JIANZHOU_DEMO=0`：真实模式。尚未完成的 LLM、STT 和平台能力会显式失败，不会自动回退为演示数据。
+- 首次启动由 `JIANZHOU_DEMO` 决定初始模式；之后以“系统设置 → 运行模式”保存的选择为准，并可在运行中立即切换。
+- 演示模式使用明确标识的确定性 Provider；真实模式使用已保存的数据源和模型配置，缺失能力会显式失败，不会自动回退为演示数据。
 - Phase 0/1 已完成启动、数据库迁移、密钥、日志和打包底座重建。
 - Phase 2 已接通“添加对标账号 → 作品监控 → 作者分析 → 单作品转雷达信号”的前后端闭环。
 - 页面存在或 HTTP 200 不代表真实业务能力已经实现。能力状态口径见 `docs/文档索引与实现基线.md`。
@@ -27,9 +27,9 @@ python app.py
 - `JIANZHOU_PORT`：本机监听端口，默认 `8741`。
 - `JIANZHOU_NO_BROWSER=1`：启动时不自动打开浏览器。
 - `JIANZHOU_DATA_DIR`：覆盖运行数据目录，适合测试和迁移。
-- `JIANZHOU_DEMO=0`：关闭演示模式。
+- `JIANZHOU_DEMO=0`：仅设置新数据目录首次启动时的初始模式；已有数据目录以持久化设置为准。
 - `JIANZHOU_TIKHUB_API_KEY`、`JIANZHOU_LLM_API_KEY`：以环境变量提供密钥，不落盘。
-- `JIANZHOU_PROVIDER_HOSTS`：逗号分隔的额外可信 Provider 域名。
+- `JIANZHOU_PROVIDER_HOSTS`：逗号分隔的额外可信 TikHub Provider 域名。
 
 在实现请求身份认证前，服务只允许绑定 `127.0.0.1`、`localhost` 或 `::1`。
 
@@ -68,6 +68,15 @@ Chrome/Edge 验证 Vue 已实际挂载，用于阻止“HTML 可访问但界面�
 - 抖音已使用真实短链完成“解析账号 → 拉取账号概况 → 按目标条数分页 → 入库”的端到端验收。其余平台已按 TikHub 官方接口建立映射，但在取得各平台真实样本并完成契约测试前仍标记为 `PARTIAL`。
 - 导航分组默认全部展开，页面切换不会自动收起；收起状态只由用户手动点击并保存在本机浏览器。
 
+## 模型与运行模式设置
+
+“系统设置 → 大模型”支持 OpenAI Compatible 服务，可配置 API Base URL、Bearer/无鉴权方式和四类任务模型名称；模型名称既可手填，也可从服务端 `/models` 读取。保存不会触发计费，“测试快速模型”会通过 `/chat/completions` 发起一次最小真实请求。
+
+- 公网自定义服务必须使用 HTTPS；本机或私有网络服务只有在用户显式开启后才允许使用 HTTP。
+- API Key 使用 Windows DPAPI 保存，设置接口只返回“是否已配置”。
+- 快速分类、深度分析、写作和结构化抽取已接入任务路由；Embedding、STT、TTS 仍明确标记为尚未接入。
+- 真实外部模型仍需使用用户自己的服务与 Key 做供应商级验收；仓库测试使用本机 OpenAI Compatible 契约服务，不冒充外部供应商成功。
+
 ## 打包
 
 ```powershell
@@ -86,5 +95,6 @@ pyinstaller packaging/pyinstaller.spec --distpath dist --workpath build --clean
 - `docs/文档索引与实现基线.md`
 - `docs/Phase2_内容雷达与对标账号闭环.md`
 - `docs/Phase2.1_对标平台与扫描策略修订.md`
+- `docs/Phase2.2_系统设置与模型Provider闭环.md`
 
 后续开发必须以真实运行证据、自动化测试和验收门槛为完成依据。

@@ -18,7 +18,7 @@ from .errors import AppError, config_missing_api_key, llm_unavailable
 from .secret_store import get_secret
 
 
-def get_setting(section: str, key: str, default: str = "") -> str:
+def get_setting(section: str, key: str, default=""):
     if (section, key) == ("source", "tikhub_api_key"):
         return get_secret("tikhub_api_key") or default
     if (section, key) == ("llm", "api_key"):
@@ -221,6 +221,10 @@ class DemoLLMProvider:
              "cls": "b-vio"},
         ]
 
+    def generate_outline(self, title: str, direction: str) -> list[str]:
+        return ["① 钩子：被打断是顺序问题", "② 我的咨询翻车案例",
+                "③ 正确顺序：结论-风险-诉求", "④ 对照改写演示", "⑤ 清单 + 模板 CTA"]
+
     def generate_draft(self, title: str, direction: str) -> str:
         return (f"{title}——先说结论：大多数表达问题不是内容问题，是顺序问题。\n\n"
                 f"我上个月接一个咨询，对方准备了 12 页材料，从背景开始讲。讲到第 3 页，"
@@ -238,21 +242,51 @@ class RealLLMProvider:
     def __init__(self):
         self.api_key = get_setting("llm", "api_key")
         self.base_url = get_setting("llm", "api_base").rstrip("/")
+        self.auth_mode = get_setting("llm", "auth_mode", "bearer")
+        self.allow_private_network = bool(get_setting("llm", "allow_private_network", False))
 
     def _require(self):
-        if not self.api_key or not self.base_url:
+        if not self.base_url:
+            raise AppError("LLM_CONFIG_INCOMPLETE", "请先填写模型 API Base URL。",
+                           stage="provider_config", provider=self.name)
+        if self.auth_mode == "bearer" and not self.api_key:
             raise config_missing_api_key("大模型")
-        _validate_llm_url(self.base_url)
+        _validate_llm_url(self.base_url, allow_private=self.allow_private_network)
+
+    def _headers(self) -> dict:
+        headers = {"Content-Type": "application/json"}
+        if self.auth_mode == "bearer" and self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _endpoint(self, path: str) -> str:
+        return f"{self.base_url}/{path.lstrip('/')}"
+
+    def _request_error(self, response, model: str = "") -> None:
+        if response.status_code in (401, 403):
+            raise AppError("LLM_UNAUTHORIZED", "大模型 API Key 无效或没有该模型权限",
+                           stage="llm_call", provider=self.name,
+                           details={"charged": False, "http_status": response.status_code})
+        if response.status_code in (402, 429):
+            raise AppError("LLM_RATE_LIMITED", "大模型余额不足或请求过频，请稍后再试",
+                           stage="llm_call", retryable=True, provider=self.name,
+                           details={"http_status": response.status_code})
+        if response.status_code != 200:
+            raise AppError("LLM_PROVIDER_ERROR",
+                           f"大模型返回异常（HTTP {response.status_code}）",
+                           stage="llm_call", retryable=True, provider=self.name,
+                           details={"http_status": response.status_code, "model": model})
 
     def chat(self, model: str, system: str, user: str, max_tokens: int = 2000) -> str:
         import httpx
         self._require()
         try:
-            _validate_llm_url(self.base_url, resolve_dns=True)
+            _validate_llm_url(self.base_url, allow_private=self.allow_private_network,
+                              resolve_dns=True)
             with httpx.Client(timeout=60.0, follow_redirects=False) as client:
                 resp = client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    self._endpoint("chat/completions"),
+                    headers=self._headers(),
                     json={"model": model, "max_tokens": max_tokens,
                           "messages": [{"role": "system", "content": system},
                                        {"role": "user", "content": user}]},
@@ -263,23 +297,55 @@ class RealLLMProvider:
             raise AppError("LLM_PROVIDER_UNAVAILABLE",
                            f"模型服务连接失败：{e.__class__.__name__}",
                            stage="llm_call", retryable=True, provider="openai_compatible")
-        if resp.status_code in (401, 403):
-            raise AppError("LLM_UNAUTHORIZED", "大模型 API Key 无效，请到系统设置检查",
-                           stage="llm_call", provider="openai_compatible",
-                           details={"charged": False})
-        if resp.status_code in (402, 429):
-            raise AppError("LLM_RATE_LIMITED", "大模型余额不足或请求过频，请稍后再试",
-                           stage="llm_call", retryable=True, provider="openai_compatible")
-        if resp.status_code != 200:
-            raise AppError("LLM_PROVIDER_ERROR",
-                           f"大模型返回异常（HTTP {resp.status_code}）",
-                           stage="llm_call", retryable=True, provider="openai_compatible")
-        data = resp.json()
+        self._request_error(resp, model)
+        try:
+            data = resp.json()
+        except ValueError:
+            raise AppError("LLM_OUTPUT_INVALID", "大模型返回了非 JSON 内容",
+                           stage="llm_parse", provider=self.name)
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError):
             raise AppError("LLM_OUTPUT_INVALID", "大模型返回结构不符合 OpenAI 协议",
                            stage="llm_parse", provider="openai_compatible")
+
+    def list_models(self) -> list[str]:
+        import httpx
+        self._require()
+        try:
+            _validate_llm_url(self.base_url, allow_private=self.allow_private_network,
+                              resolve_dns=True)
+            with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+                response = client.get(self._endpoint("models"), headers=self._headers())
+        except httpx.TimeoutException:
+            raise AppError("LLM_PROVIDER_UNAVAILABLE", "读取模型列表超时。",
+                           stage="llm_models", retryable=True, provider=self.name)
+        except httpx.HTTPError as exc:
+            raise AppError("LLM_PROVIDER_UNAVAILABLE",
+                           f"模型服务连接失败：{exc.__class__.__name__}",
+                           stage="llm_models", retryable=True, provider=self.name)
+        self._request_error(response)
+        try:
+            payload = response.json()
+            models = [str(item["id"]) for item in payload.get("data", [])
+                      if isinstance(item, dict) and item.get("id")]
+        except (ValueError, AttributeError):
+            models = []
+        if not models:
+            raise AppError("LLM_MODELS_UNAVAILABLE",
+                           "服务已响应，但没有返回 OpenAI 兼容的模型列表；仍可手动填写模型名称。",
+                           stage="llm_models", provider=self.name)
+        return sorted(set(models), key=str.lower)
+
+    def check_connection(self, model: str | None = None) -> dict:
+        selected = (model or get_setting("llm", "fast_model")).strip()
+        if not selected:
+            raise AppError("LLM_CONFIG_INCOMPLETE", "请先填写用于测试的模型名称。",
+                           stage="provider_config", provider=self.name)
+        text = self.chat(selected, "You are a connection check.",
+                         "Reply with exactly: OK", max_tokens=16)
+        return {"provider": self.name, "model": selected,
+                "reachable": True, "response_present": bool(text.strip())}
 
     def _json(self, model_key: str, system: str, user: str):
         model = get_setting("llm", model_key)
@@ -328,6 +394,7 @@ class RealLLMProvider:
         if not isinstance(result, dict):
             raise AppError("LLM_OUTPUT_INVALID", "内容拆解结果必须是对象。",
                            stage="schema_validate", provider=self.name)
+        result.setdefault("model", get_setting("llm", "analysis_model"))
         return result
 
     def diff_directions(self, title: str) -> list[dict]:
@@ -341,6 +408,17 @@ class RealLLMProvider:
                            stage="schema_validate", provider=self.name)
         return result
 
+    def generate_outline(self, title: str, direction: str) -> list[str]:
+        result = self._json(
+            "writing_model",
+            "为短视频文案生成五步提纲。只输出 JSON 字符串数组。",
+            f"标题：{title}\n差异化方向：{direction}",
+        )
+        if not isinstance(result, list) or len(result) < 3 or not all(isinstance(x, str) for x in result):
+            raise AppError("LLM_OUTPUT_INVALID", "内容提纲必须是至少三项的字符串数组。",
+                           stage="schema_validate", provider=self.name)
+        return result
+
     def generate_draft(self, title: str, direction: str) -> str:
         return self.chat(
             get_setting("llm", "writing_model"),
@@ -349,31 +427,32 @@ class RealLLMProvider:
         )
 
 
-def _validate_llm_url(url: str, resolve_dns: bool = False) -> None:
+def _validate_llm_url(url: str, allow_private: bool = False,
+                      resolve_dns: bool = False) -> None:
     parsed = urllib.parse.urlparse(url)
     host = (parsed.hostname or "").lower()
-    allowed = {"api.openai.com"}
-    allowed.update(h.strip().lower() for h in
-                   os.environ.get("JIANZHOU_LLM_HOSTS", "").split(",") if h.strip())
-    if parsed.scheme != "https" or not host or parsed.username or parsed.password or host not in allowed:
-        raise AppError("LLM_URL_BLOCKED",
-                       "模型地址必须是允许列表中的 HTTPS 域名；自定义域名需通过 JIANZHOU_LLM_HOSTS 授权。",
-                       stage="provider_config", details={"host": host})
+    if (not host or parsed.username or parsed.password
+            or parsed.scheme not in ({"http", "https"} if allow_private else {"https"})):
+        message = ("模型地址必须是合法 HTTPS URL。"
+                   if not allow_private else "模型地址必须是合法 HTTP/HTTPS URL。")
+        raise AppError("LLM_URL_BLOCKED", message, stage="provider_config",
+                       details={"host": host})
     try:
         addresses = [host] if ipaddress.ip_address(host) else []
     except ValueError:
         addresses = []
     if resolve_dns:
         try:
-            addresses = {item[4][0] for item in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)}
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            addresses = {item[4][0] for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)}
         except socket.gaierror as exc:
             raise AppError("LLM_PROVIDER_UNAVAILABLE", "模型域名无法解析。",
                            stage="llm_call", retryable=True,
                            details={"reason": exc.__class__.__name__})
     for address in addresses:
         ip = ipaddress.ip_address(address)
-        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                or ip.is_multicast or ip.is_unspecified):
+        if (not allow_private and (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)):
             raise AppError("LLM_URL_BLOCKED", "模型地址解析到了本机或私有网络。",
                            stage="provider_config", details={"address": address})
 

@@ -42,7 +42,8 @@ def main() -> None:
     _configure_logging()
     url = f"http://{host}:{port}"
     print(f"\n  见舟 · 自媒体运营工作台 v2.1")
-    print(f"  本地地址：{url}（演示模式：{'开' if os.environ.get('JIANZHOU_DEMO', '1') == '1' else '关'}）\n")
+    print(f"  本地地址：{url}")
+    print("  运行模式：启动后读取「系统设置 → 运行模式」\n")
     if os.environ.get("JIANZHOU_NO_BROWSER") != "1":
         try:
             webbrowser.open(url)

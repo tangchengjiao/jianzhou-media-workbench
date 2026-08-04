@@ -17,6 +17,7 @@ from .seed import seed_if_empty
 async def lifespan(app: FastAPI):
     init_db()
     _ensure_settings()
+    _apply_execution_mode()
     from .api.settings import migrate_legacy_secrets
     from .db import transaction
     migrate_legacy_secrets()
@@ -34,7 +35,34 @@ def _ensure_settings() -> None:
     """老库升级：补齐设置；仅在映射版本升级时替换内置 Provider 端点。"""
     import copy
     from .db import execute, jdumps, jloads, query_one
+    def merge_missing(current, defaults):
+        if not isinstance(current, dict) or not isinstance(defaults, dict):
+            return current
+        merged = copy.deepcopy(current)
+        for key, default_value in defaults.items():
+            if key not in merged:
+                merged[key] = copy.deepcopy(default_value)
+            elif isinstance(merged[key], dict) and isinstance(default_value, dict):
+                merged[key] = merge_missing(merged[key], default_value)
+        return merged
+
     for section, values in config.DEFAULT_SETTINGS.items():
+        if section == "llm":
+            row = query_one("SELECT value_json FROM app_settings WHERE key='llm'")
+            current = jloads(row["value_json"], {}) if row else {}
+            if row and int(current.get("configVersion") or 0) < int(values["configVersion"]):
+                had_custom_base = bool(str(current.get("api_base") or "").strip())
+                current["configVersion"] = values["configVersion"]
+                current.setdefault("protocol", values["protocol"])
+                current.setdefault("auth_mode", values["auth_mode"])
+                current.setdefault("allow_private_network", values["allow_private_network"])
+                if not had_custom_base:
+                    current["api_base"] = values["api_base"]
+                    for key in ("analysis_model", "writing_model"):
+                        if current.get(key) == "claude-sonnet-4":
+                            current[key] = values[key]
+                execute("UPDATE app_settings SET value_json=? WHERE key='llm'",
+                        (jdumps(current),))
         if section == "datasource":
             row = query_one("SELECT value_json FROM app_settings WHERE key='datasource'")
             current = jloads(row["value_json"], {}) if row else {}
@@ -52,9 +80,23 @@ def _ensure_settings() -> None:
                         provider.setdefault(key, copy.deepcopy(default_provider.get(key)))
                 execute("UPDATE app_settings SET value_json=? WHERE key='datasource'",
                         (jdumps(merged),))
-                continue
-        execute("INSERT OR IGNORE INTO app_settings VALUES(?,?)",
-                (section, jdumps(values)))
+                current = merged
+        row = query_one("SELECT value_json FROM app_settings WHERE key=?", (section,))
+        if not row:
+            execute("INSERT INTO app_settings VALUES(?,?)", (section, jdumps(values)))
+            continue
+        current = jloads(row["value_json"], {})
+        merged = merge_missing(current, values)
+        if merged != current:
+            execute("UPDATE app_settings SET value_json=? WHERE key=?",
+                    (jdumps(merged), section))
+
+
+def _apply_execution_mode() -> None:
+    from .db import jloads, query_one
+    row = query_one("SELECT value_json FROM app_settings WHERE key='execution'")
+    values = jloads(row["value_json"], {}) if row else {}
+    config.set_demo_mode(values.get("mode", "demo") != "real")
 
 
 def create_app() -> FastAPI:
