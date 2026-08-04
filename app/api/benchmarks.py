@@ -1,12 +1,12 @@
 """对标监控 API：账号 CRUD、扫描、作品墙、作者分析。"""
-import time
+from typing import Literal
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import benchmarks as bm_svc
-from ..datasource import PLATFORM_LABELS, detect_platform, get_datasource
-from ..db import execute, query, query_one
+from ..datasource import PLATFORM_LABELS
+from ..db import execute, jloads, query, query_one, transaction
 from ..errors import not_found
 from ..jobs import create_job
 from . import current_user_id, ok
@@ -31,10 +31,10 @@ def list_benchmarks():
 
 
 class BenchmarkIn(BaseModel):
-    link: str
-    platform: str | None = None
-    scan_range: str = "30"
-    note: str = ""
+    link: str = Field(min_length=1, max_length=2048)
+    platform: Literal["douyin", "xhs"] | None = None
+    scan_range: Literal["30", "60", "all"] = "30"
+    note: str = Field(default="", max_length=300)
 
 
 @router.post("")
@@ -42,25 +42,40 @@ def add_benchmark(body: BenchmarkIn):
     uid = current_user_id()
     result = bm_svc.add_benchmark(uid, body.link, body.platform,
                                   body.scan_range, body.note)
-    return ok({"note": f"已添加并扫描完成：新作品 {result['new']} 条，生成信号 {len(result['signals'])} 个",
+    if result.get("sync_status") == "error":
+        return ok({"note": "账号入口已保存，但首次真实同步失败；没有生成替代数据。可在账号卡片上查看原因并重试。",
+                   **result})
+    note_prefix = "账号已存在并完成刷新" if result.get("existing") else "已添加并扫描完成"
+    return ok({"note": f"{note_prefix}：新作品 {result['new']} 条，生成信号 {len(result['signals'])} 个",
                **result})
+
+
+def _owned_benchmark(bm_id: str) -> dict:
+    bm = query_one(
+        "SELECT * FROM benchmark_accounts WHERE id=? AND user_id=?",
+        (bm_id, current_user_id()),
+    )
+    if not bm:
+        raise not_found("对标账号", bm_id)
+    return bm
 
 
 @router.get("/{bm_id}")
 def benchmark_detail(bm_id: str):
-    bm = query_one("SELECT * FROM benchmark_accounts WHERE id=?", (bm_id,))
-    if not bm:
-        raise not_found("对标账号", bm_id)
+    bm = _owned_benchmark(bm_id)
     works = query("SELECT * FROM benchmark_works WHERE bm_id=?"
                   " ORDER BY create_time DESC", (bm_id,))
     analysis = query_one("SELECT * FROM author_analyses WHERE bm_id=?"
                          " ORDER BY created_at DESC", (bm_id,))
-    return ok({**_bm_full(bm), "works": works,
-               "analysis": analysis})
+    if analysis:
+        analysis = {**analysis, "result": jloads(analysis["result_json"], {})}
+        analysis.pop("result_json", None)
+    return ok({**_bm_full(bm), "works": works, "analysis": analysis})
 
 
 @router.post("/{bm_id}/scan")
 def scan(bm_id: str):
+    _owned_benchmark(bm_id)
     result = bm_svc.scan_benchmark(bm_id, emit_signals=True)
     return ok({"note": f"扫描完成：新增 {result['new']} 条，更新 {result['updated']} 条，"
                        f"新信号 {len(result['signals'])} 个", **result})
@@ -68,34 +83,40 @@ def scan(bm_id: str):
 
 @router.post("/{bm_id}/read")
 def mark_read(bm_id: str):
+    _owned_benchmark(bm_id)
     execute("UPDATE benchmark_accounts SET has_update=0 WHERE id=?", (bm_id,))
     return ok({})
 
 
 @router.delete("/{bm_id}")
 def delete_benchmark(bm_id: str):
-    bm = query_one("SELECT * FROM benchmark_accounts WHERE id=?", (bm_id,))
-    if not bm:
-        raise not_found("对标账号", bm_id)
-    execute("DELETE FROM benchmark_works WHERE bm_id=?", (bm_id,))
-    execute("DELETE FROM author_analyses WHERE bm_id=?", (bm_id,))
-    execute("DELETE FROM benchmark_accounts WHERE id=?", (bm_id,))
+    bm = _owned_benchmark(bm_id)
+    with transaction():
+        execute("DELETE FROM benchmark_accounts WHERE id=?", (bm_id,))
     return ok({"note": f"已删除对标账号「{bm['name'] or bm['uid']}」及其作品缓存（信号与已提取资产保留）"})
 
 
 @router.post("/{bm_id}/analyze")
 def analyze(bm_id: str):
+    _owned_benchmark(bm_id)
     result = bm_svc.author_analysis(bm_id)
     return ok(result)
 
 
 @router.get("/{bm_id}/works/{video_id}")
 def work_detail(bm_id: str, video_id: str):
+    _owned_benchmark(bm_id)
     w = query_one("SELECT * FROM benchmark_works WHERE bm_id=? AND video_id=?",
                   (bm_id, video_id))
     if not w:
         raise not_found("作品", video_id)
     return ok(w)
+
+
+@router.post("/{bm_id}/works/{video_id}/to-signal")
+def work_to_signal(bm_id: str, video_id: str):
+    _owned_benchmark(bm_id)
+    return ok(bm_svc.work_to_signal(bm_id, video_id))
 
 
 class ScanAllOut(BaseModel):
@@ -106,6 +127,8 @@ class ScanAllOut(BaseModel):
 def scan_all():
     uid = current_user_id()
     rows = query("SELECT id FROM benchmark_accounts WHERE user_id=?", (uid,))
+    if not rows:
+        return ok({"job_id": None, "note": "还没有对标账号，请先添加账号。"})
     job = create_job(uid, "benchmark_patrol",
                      {"title": f"巡检全部对标账号（{len(rows)} 个）",
                       "bm_ids": [r["id"] for r in rows]}, cost_est=0.0)

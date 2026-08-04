@@ -5,11 +5,11 @@
   爆款阈值 = 中位数*2（中位数为 0 时取均值*1.5）
 """
 import datetime
+import hashlib
 import json
-import time
 
 from .datasource import PLATFORM_LABELS, get_datasource
-from .db import execute, jdumps, jloads, query, query_one
+from .db import execute, jdumps, query, query_one, transaction
 from .errors import AppError, not_found
 from .ids import new_id
 
@@ -52,6 +52,13 @@ def _signal_exists(user_id: str, ref: str) -> bool:
     return query_one("SELECT id FROM signals WHERE user_id=? AND id=?", (user_id, ref)) is not None
 
 
+def _signal_id(kind: str, user_id: str, bm_id: str, video_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{kind}\0{user_id}\0{bm_id}\0{video_id}".encode("utf-8")
+    ).hexdigest()[:20]
+    return f"SG-{kind}-{digest}"
+
+
 def _emit_signal(user_id: str, sig_id: str, source_type: str, platform: str,
                  author: str, title: str, url: str, published_ts: int,
                  metrics: dict, rel_perf: str, relevance: int, timeliness: str,
@@ -67,10 +74,43 @@ def _emit_signal(user_id: str, sig_id: str, source_type: str, platform: str,
 
 
 def scan_benchmark(bm_id: str, emit_signals: bool = True) -> dict:
-    """扫描一个对标账号：拉资料+作品 → 写库 → 算分 → 发现新片/爆款生成信号与消息。"""
+    """扫描一个对标账号，并持久化真实同步状态与可恢复错误。"""
     bm = query_one("SELECT * FROM benchmark_accounts WHERE id=?", (bm_id,))
     if not bm:
         raise not_found("对标账号", bm_id)
+    execute(
+        "UPDATE benchmark_accounts SET sync_status='syncing',"
+        " last_error_code=NULL,last_error_message=NULL WHERE id=?",
+        (bm_id,),
+    )
+    try:
+        result = _scan_benchmark(bm, emit_signals)
+    except AppError as exc:
+        execute(
+            "UPDATE benchmark_accounts SET sync_status='error',"
+            " last_error_code=?,last_error_message=? WHERE id=?",
+            (exc.code, exc.message, bm_id),
+        )
+        raise
+    except Exception:
+        execute(
+            "UPDATE benchmark_accounts SET sync_status='error',"
+            " last_error_code='UNEXPECTED_ERROR',"
+            " last_error_message='同步发生未预期错误，请查看本地日志' WHERE id=?",
+            (bm_id,),
+        )
+        raise
+    execute(
+        "UPDATE benchmark_accounts SET sync_status='ready',"
+        " last_error_code=NULL,last_error_message=NULL WHERE id=?",
+        (bm_id,),
+    )
+    return result
+
+
+def _scan_benchmark(bm: dict, emit_signals: bool) -> dict:
+    """拉取资料与作品，原子写入一次扫描结果。"""
+    bm_id = bm["id"]
     ds = get_datasource()
     overview = ds.account_overview(bm["uid"], bm["platform"])
     limit = {"30": 30, "60": 60, "all": 200}.get(bm["scan_range"] or "30", 30)
@@ -84,37 +124,50 @@ def scan_benchmark(bm_id: str, emit_signals: bool = True) -> dict:
 
     new_works, updated = [], 0
     latest_id = bm["last_video_id"]
-    for w in works:
-        if not w.get("video_id"):
-            continue
-        existing = query_one("SELECT id FROM benchmark_works WHERE bm_id=? AND video_id=?",
-                             (bm_id, w["video_id"]))
-        if existing:
-            execute(
-                "UPDATE benchmark_works SET plays=?, likes=?, comments=?, collects=?, shares=? WHERE id=?",
-                (w["plays"], w["likes"], w["comments"], w["collects"], w["shares"], existing["id"]))
-            updated += 1
-        else:
-            execute(
-                "INSERT INTO benchmark_works("
-                "id,bm_id,video_id,title,cover,url,create_time,plays,likes,comments,"
-                "collects,shares,score,is_hot,duration,first_seen_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (new_id("bw"), bm_id, w["video_id"],
-                 w["title"], w.get("cover", ""), w.get("url", ""), w.get("create_time") or 0,
-                 w["plays"], w["likes"], w["comments"], w["collects"], w["shares"],
-                 bm_score(w), 0, w.get("duration") or 0, now()))
-            new_works.append(w)
-    if works:
-        latest_id = max((w for w in works if w.get("create_time")),
-                        key=lambda x: x["create_time"], default=works[0])["video_id"]
-
-    execute(
-        "UPDATE benchmark_accounts SET name=?, avatar=?, bio=?, fans=?, likes_count=?,"
-        " video_count=?, last_video_id=?, last_scan_at=? WHERE id=?",
-        (overview.get("name") or bm["name"], overview.get("avatar", ""),
-         overview.get("bio", ""), overview.get("fans", 0), overview.get("likes", 0),
-         overview.get("video_count", 0), latest_id, now(), bm_id))
+    with transaction():
+        for w in works:
+            if not w.get("video_id"):
+                continue
+            existing = query_one(
+                "SELECT id FROM benchmark_works WHERE bm_id=? AND video_id=?",
+                (bm_id, w["video_id"]),
+            )
+            if existing:
+                execute(
+                    "UPDATE benchmark_works SET title=?,cover=?,url=?,create_time=?,"
+                    " plays=?,likes=?,comments=?,collects=?,shares=?,duration=? WHERE id=?",
+                    (w["title"], w.get("cover", ""), w.get("url", ""),
+                     w.get("create_time") or 0, w["plays"], w["likes"],
+                     w["comments"], w["collects"], w["shares"],
+                     w.get("duration") or 0, existing["id"]),
+                )
+                updated += 1
+            else:
+                execute(
+                    "INSERT INTO benchmark_works("
+                    "id,bm_id,video_id,title,cover,url,create_time,plays,likes,comments,"
+                    "collects,shares,score,is_hot,duration,first_seen_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (new_id("bw"), bm_id, w["video_id"],
+                     w["title"], w.get("cover", ""), w.get("url", ""),
+                     w.get("create_time") or 0, w["plays"], w["likes"],
+                     w["comments"], w["collects"], w["shares"], bm_score(w),
+                     0, w.get("duration") or 0, now()),
+                )
+                new_works.append(w)
+        if works:
+            latest_id = max(
+                (w for w in works if w.get("create_time")),
+                key=lambda x: x["create_time"], default=works[0],
+            )["video_id"]
+        execute(
+            "UPDATE benchmark_accounts SET name=?,avatar=?,bio=?,fans=?,likes_count=?,"
+            " video_count=?,last_video_id=?,last_scan_at=? WHERE id=?",
+            (overview.get("name") or bm["name"], overview.get("avatar", ""),
+             overview.get("bio", ""), overview.get("fans", 0),
+             overview.get("likes", 0), overview.get("video_count", 0),
+             latest_id, now(), bm_id),
+        )
     stats = compute_account_stats(bm_id)
     execute(
         "UPDATE benchmark_accounts SET median_score=?, avg_score=?, post_gap_days=? WHERE id=?",
@@ -125,7 +178,7 @@ def scan_benchmark(bm_id: str, emit_signals: bool = True) -> dict:
         uid = bm["user_id"]
         name = overview.get("name") or bm["name"] or bm["uid"]
         for w in new_works[:5]:
-            sid = f"SG-BM-{bm_id[-4:]}-{w['video_id'][-6:]}"
+            sid = _signal_id("BM", uid, bm_id, w["video_id"])
             _emit_signal(uid, sid, "对标 · 新作", bm["platform"], "@" + name,
                          w["title"], w.get("url", ""), w.get("create_time") or 0,
                          {"plays": w["plays"], "likes": w["likes"],
@@ -135,7 +188,7 @@ def scan_benchmark(bm_id: str, emit_signals: bool = True) -> dict:
         hot_works = query("SELECT * FROM benchmark_works WHERE bm_id=? AND is_hot=1",
                           (bm_id,))
         for w in hot_works[:3]:
-            sid = f"SG-HOT-{bm_id[-4:]}-{w['video_id'][-6:]}"
+            sid = _signal_id("HOT", uid, bm_id, w["video_id"])
             rel = f"账号均值 {round(w['score'] / max(stats['avg_score'], 1), 1)}×" if stats["avg_score"] else ""
             _emit_signal(uid, sid, "对标 · 高表现", bm["platform"], "@" + name,
                          w["title"], w["url"], w["create_time"],
@@ -157,25 +210,39 @@ def scan_benchmark(bm_id: str, emit_signals: bool = True) -> dict:
 
 def add_benchmark(user_id: str, link: str, platform: str | None,
                   scan_range: str = "30", note: str = "") -> dict:
-    """解析链接 → 建档 → 首次扫描。失败显式报错，不创建空壳账号。"""
+    """解析链接 → 建档 → 首次扫描；配置缺失时绝不创建假账号。"""
     ds = get_datasource()
+    if hasattr(ds, "require_configured"):
+        ds.require_configured()
     resolved = ds.resolve_account(link, platform)
+    existing = query_one(
+        "SELECT id FROM benchmark_accounts WHERE user_id=? AND platform=? AND uid=?",
+        (user_id, resolved["platform"], resolved["uid"]),
+    )
+    if existing:
+        try:
+            result = scan_benchmark(existing["id"], emit_signals=True)
+        except AppError as exc:
+            return {"id": existing["id"], "new": 0, "updated": 0,
+                    "signals": [], "existing": True, "sync_status": "error",
+                    "error": exc.to_dict()}
+        return {"id": existing["id"], "existing": True, **result}
     bm_id = new_id("bm")
     execute(
         "INSERT INTO benchmark_accounts("
         "id,user_id,platform,uid,link,name,avatar,bio,fans,likes_count,video_count,"
         "median_score,avg_score,post_gap_days,last_video_id,has_update,scan_range,note,"
-        "created_at,last_scan_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "created_at,last_scan_at,sync_status,last_error_code,last_error_message) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (bm_id, user_id, resolved["platform"], resolved["uid"], link.strip(),
          resolved.get("name", ""), "", "", 0, 0, 0, 0, 0, 0.0, None, 0,
-         scan_range, note, now(), None))
+         scan_range, note, now(), None, "idle", None, None))
     try:
         result = scan_benchmark(bm_id, emit_signals=True)
-    except Exception:
-        # 首次扫描失败：保留账号但明确标记，不伪造同步成功
-        execute("UPDATE benchmark_accounts SET note=? WHERE id=?",
-                ((note + " " if note else "") + "首次扫描失败，请手动刷新重试", bm_id))
-        raise
+    except AppError as exc:
+        # 账号入口保留，用户可看见失败原因并重试；绝不写入替代作品。
+        return {"id": bm_id, "new": 0, "updated": 0, "signals": [],
+                "sync_status": "error", "error": exc.to_dict()}
     return {"id": bm_id, **result}
 
 
@@ -233,6 +300,32 @@ def author_analysis(bm_id: str) -> dict:
     execute("INSERT INTO author_analyses VALUES(?,?,?,?,?)",
             (aid, bm_id, engine, jdumps(result), now()))
     return result
+
+
+def work_to_signal(bm_id: str, video_id: str) -> dict:
+    """把任意对标作品接入雷达/提取链路，而不是只处理自动判定的爆款。"""
+    bm = query_one("SELECT * FROM benchmark_accounts WHERE id=?", (bm_id,))
+    if not bm:
+        raise not_found("对标账号", bm_id)
+    work = query_one(
+        "SELECT * FROM benchmark_works WHERE bm_id=? AND video_id=?",
+        (bm_id, video_id),
+    )
+    if not work:
+        raise not_found("作品", video_id)
+    signal_id = _signal_id("WORK", bm["user_id"], bm_id, video_id)
+    ds = get_datasource()
+    _emit_signal(
+        bm["user_id"], signal_id, "对标 · 手动关注", bm["platform"],
+        "@" + (bm["name"] or bm["uid"]), work["title"], work["url"],
+        work["create_time"],
+        {"plays": work["plays"], "likes": work["likes"],
+         "comments": work["comments"], "collects": work["collects"]},
+        (f"账号均值 {round(work['score'] / max(bm['avg_score'], 1), 1)}×"
+         if bm["avg_score"] else ""),
+        80, "手动加入", "manual", ds.name,
+    )
+    return {"signal_id": signal_id, "title": work["title"]}
 
 
 def _extract_json(text: str) -> dict:

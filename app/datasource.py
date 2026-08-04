@@ -48,6 +48,34 @@ def map_obj(src: dict, mapping: dict) -> dict:
     return {k: json_path(src, v) for k, v in (mapping or {}).items()}
 
 
+def _text_value(value) -> str:
+    """Normalize provider-specific scalar/list URL fields before SQLite binding."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        return _text_value(value[0]) if value else ""
+    if isinstance(value, dict):
+        for key in ("url", "uri", "url_list", "download_url"):
+            if key in value:
+                return _text_value(value[key])
+    return ""
+
+
+def _int_value(value) -> int:
+    if value in (None, ""):
+        return 0
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(float(str(value).replace(",", "")))
+    except (TypeError, ValueError):
+        return 0
+
+
 # ================= 错误分类翻译层（HTTP → 用户可懂） =================
 
 def classify_http(status: int, provider: str) -> AppError:
@@ -204,6 +232,10 @@ class EndpointExecutor:
             raise config_missing_api_key(f"数据源（{self.active}）")
         _validate_provider_url(self.pconf["baseUrl"])
 
+    def require_configured(self) -> None:
+        """Public fail-fast boundary used before creating persistent records."""
+        self._require()
+
     def _throttle(self):
         rpm = (self.pconf.get("rateLimit") or {}).get("rpm", 30)
         gap = max(0.0, 60.0 / max(rpm, 1))
@@ -282,34 +314,80 @@ class EndpointExecutor:
 
     # ---- 统一能力接口（与 DemoDatasource 对齐） ----
     def resolve_account(self, link: str, platform: str | None = None) -> dict:
+        self._require()
         plat = platform or detect_platform(link) or "douyin"
+        if plat not in PLATFORM_LABELS:
+            raise AppError("PLATFORM_UNSUPPORTED", f"暂不支持平台：{plat}",
+                           stage="resolve_account", provider=self.name)
         # 抖音：短链跟随提取 sec_uid
         uid = link.strip()
         if plat == "douyin":
             uid = _resolve_douyin_uid(link) or uid
+            if "/" in uid or not uid:
+                raise AppError(
+                    "RESOLVE_FAILED",
+                    "未能从抖音主页链接中解析 sec_user_id。请粘贴完整主页链接，"
+                    "或直接输入 sec_user_id 后重试。",
+                    stage="resolve_account", provider=self.name,
+                    details={"platform": plat},
+                )
+        elif plat == "xhs":
+            uid = _resolve_xhs_uid(link) or uid
+            if "/" in uid or not uid:
+                raise AppError(
+                    "RESOLVE_FAILED",
+                    "未能从小红书主页链接中解析 user_id。请粘贴完整的用户主页链接，"
+                    "或直接输入 user_id 后重试。",
+                    stage="resolve_account", provider=self.name,
+                    details={"platform": plat},
+                )
         return {"uid": uid, "platform": plat, "name": "", "link": link.strip()}
 
     def account_overview(self, uid: str, platform: str) -> dict:
         r = self.call_endpoint("accountOverview", {"uid": uid, "platform": platform})
         d = r["data"]
-        return {"uid": uid, "platform": platform, "name": d.get("name") or "",
-                "avatar": d.get("avatar") or "", "bio": d.get("bio") or "",
-                "fans": d.get("fans") or 0, "likes": d.get("likes") or 0,
-                "video_count": d.get("video_count") or 0}
+        return {"uid": uid, "platform": platform, "name": _text_value(d.get("name")),
+                "avatar": _text_value(d.get("avatar")), "bio": _text_value(d.get("bio")),
+                "fans": _int_value(d.get("fans")), "likes": _int_value(d.get("likes")),
+                "video_count": _int_value(d.get("video_count"))}
 
     def account_videos(self, uid: str, platform: str, limit: int = 30) -> dict:
-        r = self.call_endpoint("accountVideos",
-                               {"uid": uid, "platform": platform, "limit": limit,
-                                "cursor": "0"})
-        works = [{"video_id": str(w.get("video_id") or ""),
-                  "title": w.get("title") or "", "cover": w.get("cover") or "",
-                  "url": w.get("url") or "", "create_time": w.get("create_time") or 0,
-                  "plays": w.get("plays") or 0, "likes": w.get("likes") or 0,
-                  "comments": w.get("comments") or 0, "collects": w.get("collects") or 0,
-                  "shares": w.get("shares") or 0, "duration": w.get("duration") or 0}
-                 for w in r["data"]]
-        return {"works": works, "cursor": r.get("cursor", ""),
-                "has_more": bool(r.get("hasMore"))}
+        target = min(max(int(limit), 1), 200)
+        cursor = "0" if platform == "douyin" else ""
+        raw_works: list[dict] = []
+        seen: set[str] = set()
+        has_more = True
+        pages = 0
+        while len(raw_works) < target and has_more and pages < 10:
+            page_limit = min(20, target - len(raw_works))
+            r = self.call_endpoint(
+                "accountVideos",
+                {"uid": uid, "platform": platform, "limit": page_limit,
+                 "cursor": cursor},
+            )
+            page = r.get("data") or []
+            for item in page:
+                video_id = str(item.get("video_id") or "")
+                if video_id and video_id not in seen:
+                    raw_works.append(item)
+                    seen.add(video_id)
+            pages += 1
+            has_more = bool(r.get("hasMore"))
+            next_cursor = r.get("cursor")
+            if (next_cursor is None or next_cursor == "") and page:
+                next_cursor = page[-1].get("cursor")
+            if not has_more or next_cursor in (None, "", cursor):
+                break
+            cursor = str(next_cursor)
+        works = [{"video_id": _text_value(w.get("video_id")),
+                  "title": _text_value(w.get("title")), "cover": _text_value(w.get("cover")),
+                  "url": _text_value(w.get("url")), "create_time": _int_value(w.get("create_time")),
+                  "plays": _int_value(w.get("plays")), "likes": _int_value(w.get("likes")),
+                  "comments": _int_value(w.get("comments")), "collects": _int_value(w.get("collects")),
+                  "shares": _int_value(w.get("shares")), "duration": _int_value(w.get("duration"))}
+                 for w in raw_works[:target]]
+        return {"works": works, "cursor": cursor, "has_more": has_more,
+                "pages": pages}
 
     def video_text(self, video_id: str, platform: str, title: str = "") -> dict:
         r = self.call_endpoint("videoText", {"videoId": video_id, "platform": platform})
@@ -367,6 +445,35 @@ def _resolve_douyin_uid(link: str) -> str | None:
     return None
 
 
+def _resolve_xhs_uid(link: str) -> str | None:
+    import re
+    value = (link or "").strip()
+    m = (re.search(r"/user/profile/([A-Za-z0-9_-]+)", value)
+         or re.search(r"[?&]user_id=([A-Za-z0-9_-]+)", value))
+    if m:
+        return m.group(1)
+    if value and "/" not in value and " " not in value:
+        return value
+    if "xhslink.com" in value:
+        try:
+            with httpx.Client(timeout=12.0, follow_redirects=False) as client:
+                cur = value
+                for _ in range(6):
+                    _validate_xhs_redirect(cur)
+                    response = client.get(cur)
+                    location = response.headers.get("location")
+                    if 300 <= response.status_code < 400 and location:
+                        cur = urllib.parse.urljoin(cur, location)
+                        m = re.search(r"/user/profile/([A-Za-z0-9_-]+)", cur)
+                        if m:
+                            return m.group(1)
+                        continue
+                    break
+        except httpx.HTTPError:
+            return None
+    return None
+
+
 def _allowed_provider_hosts() -> set[str]:
     configured = {h.strip().lower() for h in
                   os.environ.get("JIANZHOU_PROVIDER_HOSTS", "").split(",") if h.strip()}
@@ -412,6 +519,15 @@ def _validate_social_redirect(url: str) -> None:
     allowed = ("douyin.com", "iesdouyin.com", "dy.tt")
     if parsed.scheme != "https" or not any(host == d or host.endswith("." + d) for d in allowed):
         raise AppError("SOCIAL_REDIRECT_BLOCKED", "短链跳转到了非抖音域名，解析已停止。",
+                       stage="resolve_account", details={"host": host})
+
+
+def _validate_xhs_redirect(url: str) -> None:
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    allowed = ("xiaohongshu.com", "xhslink.com")
+    if parsed.scheme != "https" or not any(host == d or host.endswith("." + d) for d in allowed):
+        raise AppError("SOCIAL_REDIRECT_BLOCKED", "短链跳转到了非小红书域名，解析已停止。",
                        stage="resolve_account", details={"host": host})
 
 

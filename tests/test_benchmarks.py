@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def run_isolated(source: str, *, demo: bool = True) -> dict:
+    with tempfile.TemporaryDirectory(prefix="jianzhou-benchmark-test-") as temp:
+        env = os.environ.copy()
+        env.update({
+            "JIANZHOU_DATA_DIR": temp,
+            "JIANZHOU_DEMO": "1" if demo else "0",
+            "PYTHONUTF8": "1",
+        })
+        result = subprocess.run(
+            [sys.executable, "-c", textwrap.dedent(source)],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                f"isolated process failed\nstdout={result.stdout}\nstderr={result.stderr}"
+            )
+        return json.loads(result.stdout.strip())
+
+
+class BenchmarkFlowTests(unittest.TestCase):
+    def test_demo_account_to_work_to_signal_flow(self):
+        result = run_isolated("""
+            import json
+            from app.benchmarks import add_benchmark, work_to_signal
+            from app.db import init_db, query, query_one, transaction
+            from app.main import _ensure_settings
+            from app.seed import seed_if_empty
+            init_db(); _ensure_settings()
+            with transaction():
+                seed_if_empty()
+            created = add_benchmark(
+                "u-zhou", "https://www.douyin.com/user/test-account",
+                "douyin", "30", "test",
+            )
+            account = query_one(
+                "SELECT * FROM benchmark_accounts WHERE id=?", (created["id"],)
+            )
+            work = query_one(
+                "SELECT * FROM benchmark_works WHERE bm_id=? ORDER BY create_time DESC",
+                (created["id"],),
+            )
+            signal = work_to_signal(created["id"], work["video_id"])
+            saved_signal = query_one(
+                "SELECT * FROM signals WHERE id=?", (signal["signal_id"],)
+            )
+            columns = {row["name"] for row in query("PRAGMA table_info(benchmark_accounts)")}
+            print(json.dumps({
+                "sync_status": account["sync_status"],
+                "works": query_one(
+                    "SELECT COUNT(*) c FROM benchmark_works WHERE bm_id=?", (created["id"],)
+                )["c"],
+                "signal_category": saved_signal["category"],
+                "schema_version": query_one("PRAGMA user_version")["user_version"],
+                "has_sync_columns": {"sync_status", "last_error_code", "last_error_message"} <= columns,
+            }))
+        """)
+        self.assertEqual(result["sync_status"], "ready")
+        self.assertGreater(result["works"], 0)
+        self.assertEqual(result["signal_category"], "manual")
+        self.assertEqual(result["schema_version"], 3)
+        self.assertTrue(result["has_sync_columns"])
+
+    def test_real_mode_missing_key_creates_no_benchmark_shell(self):
+        result = run_isolated("""
+            import json
+            from app.benchmarks import add_benchmark
+            from app.db import init_db, query_one, transaction
+            from app.errors import AppError
+            from app.main import _ensure_settings
+            from app.seed import seed_if_empty
+            init_db(); _ensure_settings()
+            with transaction():
+                seed_if_empty()
+            code = None
+            try:
+                add_benchmark("u-local", "https://www.douyin.com/user/abc", "douyin")
+            except AppError as exc:
+                code = exc.code
+            print(json.dumps({
+                "error": code,
+                "accounts": query_one("SELECT COUNT(*) c FROM benchmark_accounts")["c"],
+            }))
+        """, demo=False)
+        self.assertEqual(result, {"error": "CONFIG_MISSING_API_KEY", "accounts": 0})
+
+    def test_real_executor_paginates_and_deduplicates(self):
+        from app.datasource import EndpointExecutor
+
+        executor = object.__new__(EndpointExecutor)
+        calls = []
+
+        def fake_call(capability, args):
+            calls.append(dict(args))
+            start = 0 if args["cursor"] == "0" else 20
+            data = [
+                {"video_id": f"v{i}", "title": f"work {i}", "cursor": "next"}
+                for i in range(start, start + 20)
+            ]
+            return {
+                "data": data,
+                "cursor": "next" if start == 0 else "done",
+                "hasMore": start == 0,
+            }
+
+        executor.call_endpoint = fake_call
+        result = executor.account_videos("uid", "douyin", limit=30)
+        self.assertEqual(len(result["works"]), 30)
+        self.assertEqual(len({work["video_id"] for work in result["works"]}), 30)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["limit"], 20)
+        self.assertEqual(calls[1]["cursor"], "next")
+
+    def test_xhs_profile_link_resolves_user_id(self):
+        from app.datasource import _resolve_xhs_uid
+
+        self.assertEqual(
+            _resolve_xhs_uid(
+                "https://www.xiaohongshu.com/user/profile/5f123abc987?xsec_token=demo"
+            ),
+            "5f123abc987",
+        )
+        self.assertEqual(_resolve_xhs_uid("raw_user_id_123"), "raw_user_id_123")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -188,11 +188,22 @@ CREATE INDEX IF NOT EXISTS idx_works_benchmark_time ON benchmark_works(bm_id, cr
 CREATE INDEX IF NOT EXISTS idx_inbox_user_read_ts ON inbox(user_id, read, ts DESC);
 """
 
+BENCHMARK_SYNC_STATE_MIGRATION = """
+ALTER TABLE benchmark_accounts ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'idle';
+ALTER TABLE benchmark_accounts ADD COLUMN last_error_code TEXT;
+ALTER TABLE benchmark_accounts ADD COLUMN last_error_message TEXT;
+CREATE INDEX IF NOT EXISTS idx_benchmarks_user_sync_status
+ON benchmark_accounts(user_id, sync_status, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_benchmarks_user_platform_uid
+ON benchmark_accounts(user_id, platform, uid);
+"""
+
 MIGRATIONS = [
     (1, "critical_indexes", INDEX_MIGRATION),
     (2, "constrained_schema_marker",
      "CREATE INDEX IF NOT EXISTS idx_schema_migrations_applied "
      "ON schema_migrations(applied_at);"),
+    (3, "benchmark_sync_state", BENCHMARK_SYNC_STATE_MIGRATION),
 ]
 
 

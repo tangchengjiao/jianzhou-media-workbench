@@ -22,10 +22,10 @@ def check(name: str, cond: bool, detail: str = "") -> None:
     global PASS, FAIL
     if cond:
         PASS += 1
-        print(f"  ✓ {name}")
+        print(f"  [PASS] {name}")
     else:
         FAIL += 1
-        print(f"  ✗ {name}  {detail}")
+        print(f"  [FAIL] {name}  {detail}")
 
 
 def wait_job(client: httpx.Client, job_id: str, timeout: float = 20.0) -> dict:
@@ -63,6 +63,29 @@ def main() -> int:
         sig = next((s for s in signals
                     if s["source_type"].startswith("对标") and "偷懒" not in s["title"]),
                    signals[0])
+
+        # 对标账号入口 → 作品墙 → 任意作品接入雷达 → 作者分析
+        r = c.get("/api/benchmarks")
+        benchmarks = r.json()["data"]
+        check("内容雷达存在对标账号入口数据", len(benchmarks) >= 1)
+        benchmark = benchmarks[0]
+        detail = c.get(f"/api/benchmarks/{benchmark['id']}").json()["data"]
+        check("对标账号可打开作品监控墙", len(detail["works"]) >= 1)
+        work = detail["works"][0]
+        r = c.post(f"/api/benchmarks/{benchmark['id']}/works/{work['video_id']}/to-signal")
+        work_signal = r.json()["data"]
+        check("任意对标作品可接入雷达与下游链路", bool(work_signal["signal_id"]))
+        r = c.post(f"/api/benchmarks/{benchmark['id']}/analyze")
+        check("对标作者分析基于作品数据完成",
+              r.status_code == 200 and r.json()["data"]["metrics"]["works_analyzed"] >= 1)
+        before_count = len(benchmarks)
+        r = c.post("/api/benchmarks", json={
+            "link": benchmark["link"], "platform": benchmark["platform"],
+            "scan_range": benchmark["scan_range"], "note": "重复添加验收",
+        })
+        after_count = len(c.get("/api/benchmarks").json()["data"])
+        check("重复添加同一账号会刷新而不是创建重复记录",
+              r.json()["data"].get("existing") is True and after_count == before_count)
 
         # 提取：先计划（不执行），计划含成本与默认不授权
         r = c.post("/api/extraction/plans", json={"signal_id": sig["id"]})
