@@ -85,7 +85,15 @@
         if (PAGE_COMPONENTS[p] && p !== store.page) this.go(p);
       });
       document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') document.querySelectorAll('.modal.open').forEach((m) => m.classList.remove('open'));
+        if (e.key === 'Escape') {
+          const open = Array.from(document.querySelectorAll('.modal.open'));
+          const top = open[open.length - 1];
+          if (top) {
+            const close = top.querySelector('.modal-x');
+            if (close) close.click();
+            else top.classList.remove('open');
+          }
+        }
       });
     },
   });

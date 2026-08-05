@@ -341,7 +341,12 @@ def ds_check(body: DatasourceCheckIn):
     account = ds.resolve_account(body.link, body.platform)
     overview = ds.account_overview(account["uid"], account["platform"])
     return ok({"provider": ds.name, "reachable": True,
-               "platform": account["platform"], "account_name": overview.get("name"),
+               "platform": account["platform"], "uid": account["uid"],
+               "link": body.link.strip(), "account_name": overview.get("name"),
+               "avatar": overview.get("avatar") or "", "bio": overview.get("bio") or "",
+               "fans": int(overview.get("fans") or 0),
+               "likes": int(overview.get("likes") or 0),
+               "video_count": int(overview.get("video_count") or 0),
                "note": f"真实数据源连通正常（{ds.name}）"})
 
 

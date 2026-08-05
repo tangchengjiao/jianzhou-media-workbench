@@ -1,0 +1,33 @@
+{
+  "mode": "real-provider-interaction",
+  "browser": "Chrome",
+  "passed": 5,
+  "failed": 0,
+  "results": [
+    {
+      "name": "真实账号：Chrome 表单输入→TikHub 解析→落库→快照回显",
+      "status": "PASS",
+      "seconds": 11.49
+    },
+    {
+      "name": "系统设置数据源：保存→真实测试→账号结果与后续入口",
+      "status": "PASS",
+      "seconds": 9.05
+    },
+    {
+      "name": "大模型：Chrome 点击最小真实生成并回显模型结果",
+      "status": "PASS",
+      "seconds": 6.69
+    },
+    {
+      "name": "ASR：选择真实 WAV→百炼转写→文本回显",
+      "status": "PASS",
+      "seconds": 8.99
+    },
+    {
+      "name": "浏览器控制台无严重错误",
+      "status": "PASS",
+      "errors": []
+    }
+  ]
+}

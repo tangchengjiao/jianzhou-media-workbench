@@ -1,6 +1,6 @@
 """内容拆解：拆解任务、拆解结果、内容模式卡。拆解 ≠ 仿写。"""
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..db import execute, jdumps, jloads, query, query_one
 from ..jobs import create_job
@@ -20,9 +20,10 @@ def list_analysis():
                      (uid,))
     for a in analyses:
         a["result"] = jloads(a["result_json"], {})
-        sc = query_one("SELECT title FROM source_contents WHERE id=?",
+        sc = query_one("SELECT title,signal_id FROM source_contents WHERE id=?",
                        (a["source_content_id"],))
         a["source_title"] = sc["title"] if sc else a["source_content_id"]
+        a["signal_id"] = sc["signal_id"] if sc else None
     pending = query(
         "SELECT id, title, status FROM source_contents"
         " WHERE user_id=? AND status='transcribed'"
@@ -94,3 +95,44 @@ def save_pattern(body: PatternIn):
             (pid, uid, body.name, "draft", 1, "低", "待补充证据",
              body.note or "从拆解保存的草稿模式卡", now()))
     return ok({"id": pid, "note": "已保存为模式卡草稿，积累证据后可提升置信度"})
+
+
+def _comparison_key() -> str:
+    return f"analysis_comparison:{current_user_id()}"
+
+
+@router.get("/comparison-items")
+def comparison_items():
+    row = query_one("SELECT value_json FROM app_settings WHERE key=?", (_comparison_key(),))
+    saved = jloads(row["value_json"], []) if row else []
+    output = []
+    for item in saved:
+        analysis = query_one("SELECT id,source_content_id,result_json,created_at FROM analyses"
+                             " WHERE id=? AND user_id=?", (item.get("analysis_id"), current_user_id()))
+        if not analysis:
+            continue
+        source = query_one("SELECT title FROM source_contents WHERE id=?", (analysis["source_content_id"],))
+        result = jloads(analysis["result_json"], {})
+        output.append({**item, "title": source["title"] if source else analysis["id"],
+                       "topic": result.get("topic", ""),
+                       "hook": (result.get("hook") or {}).get("text", ""),
+                       "created_at": analysis["created_at"]})
+    return ok(output)
+
+
+class ComparisonItemIn(BaseModel):
+    analysis_id: str
+    performance_bucket: str = Field(pattern="^(high|medium|low)$")
+    note: str = Field(default="", max_length=300)
+
+
+@router.post("/comparison-items")
+def add_comparison_item(body: ComparisonItemIn):
+    owned_row("analyses", body.analysis_id, current_user_id(), label="拆解")
+    row = query_one("SELECT value_json FROM app_settings WHERE key=?", (_comparison_key(),))
+    saved = jloads(row["value_json"], []) if row else []
+    saved = [item for item in saved if item.get("analysis_id") != body.analysis_id]
+    saved.append(body.model_dump())
+    execute("INSERT OR REPLACE INTO app_settings(key,value_json) VALUES(?,?)",
+            (_comparison_key(), jdumps(saved)))
+    return ok({"note": "已加入对比组；可继续补齐高/中/低表现样本", "count": len(saved)})

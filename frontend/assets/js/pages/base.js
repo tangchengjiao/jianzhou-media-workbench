@@ -8,7 +8,7 @@
       return {
         s: null, actions: [], signals: [], tasks: { running: [], recent_done: [] },
         chat: [{ role: 'bot', html: '<div class="intent-line">就绪 · 可解析意图：状态查询 / 创建任务 / 调整计划 / 开始复盘 / 页面跳转</div>我在。你可以直接说：「今天最值得处理什么」「把对标爆款加入提取队列」或「继续上次的 IP 访谈」。涉及费用的动作，我会先生成执行计划等你确认。' }],
-        cmd: '',
+        cmd: '', listening: false, speechRecognition: null,
         quickCmds: ['今天最值得处理什么？', '把对标爆款加入提取队列', '根据本周剩余时间重新调整排期', '继续上次的IP访谈'],
       };
     },
@@ -38,6 +38,7 @@
         this.$nextTick(() => { const l = document.getElementById('wbChatLog'); if (l) l.scrollTop = l.scrollHeight; });
         try {
           const r = await api.post('/api/workbench/commands/parse', { text: v });
+          (r.actions || []).forEach((action) => { if (action.kind === 'modal' && action.target === 'plan') action.signal_id = r.signal_id; });
           const btns = (r.actions || []).map((a) =>
             `<button class="btn btn-sm ${a.primary ? 'btn-pri' : 'btn-ghost'}" data-act='${JSON.stringify(a).replace(/'/g, '&#39;')}'>${a.label}</button>`).join('');
           this.chat.push({
@@ -52,14 +53,27 @@
         if (!btn) return;
         const act = JSON.parse(btn.dataset.act);
         if (act.kind === 'page') go(act.target);
-        else if (act.kind === 'modal' && act.target === 'plan') await this.openExtractionPlan();
+        else if (act.kind === 'modal' && act.target === 'plan') await this.openExtractionPlan(act.signal_id);
         else toast(act.target || '已处理', 'warn');
       },
-      async openExtractionPlan() {
+      async openExtractionPlan(signalId) {
         try {
-          const plan = await api.post('/api/extraction/plans', { signal_id: 'SG-2031' });
+          if (!signalId) { go('radar'); toast('请先在内容雷达选择一条真实信号', 'warn'); return; }
+          const plan = await api.post('/api/extraction/plans', { signal_id: signalId });
           bus.emit('open-plan', plan);
         } catch (e) { handleError(e); }
+      },
+      startVoiceCommand() {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) { toast('当前 Chrome 未提供浏览器语音识别，请使用文字指令或到 IP 档案使用可审计的 ASR 访谈', 'warn'); return; }
+        if (this.listening && this.speechRecognition) { this.speechRecognition.stop(); return; }
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'zh-CN'; recognition.interimResults = false; recognition.maxAlternatives = 1;
+        recognition.onstart = () => { this.listening = true; };
+        recognition.onend = () => { this.listening = false; };
+        recognition.onerror = (event) => { this.listening = false; toast('语音指令识别失败：' + event.error, 'err'); };
+        recognition.onresult = (event) => { this.cmd = event.results[0][0].transcript; toast('语音已转为文字，请确认后发送'); };
+        this.speechRecognition = recognition; recognition.start();
       },
     },
     template: `
@@ -78,7 +92,7 @@
             <div style="min-width:200px">
               <div style="font-size:11px;color:var(--ink3);margin-bottom:4px">本周目标 · 发布 {{ s.cycle.weekly_target }} 条</div>
               <div style="display:flex;align-items:center;gap:10px">
-                <div class="progress" style="flex:1"><i :style="{width:(s.cycle.weekly_done/s.cycle.weekly_target*100)+'%'}"></i></div>
+                <div class="progress" style="flex:1"><i :style="{width:(s.cycle.weekly_target?Math.min(100,s.cycle.weekly_done/s.cycle.weekly_target*100):0)+'%'}"></i></div>
                 <b>{{ s.cycle.weekly_done }} / {{ s.cycle.weekly_target }}</b></div>
             </div>
             <div class="mini-note">{{ s.cycle.week }} · 核心目标：{{ s.cycle.goal }}</div>
@@ -102,7 +116,7 @@
               <div class="action-item" v-for="(a,i) in actions" :key="i" :class="'p-'+a.priority">
                 <span class="ai-tag badge" :class="a.cls">{{ a.tag }}</span>
                 <div class="ai-body"><div class="ai-title">{{ a.title }}</div><div class="ai-meta">{{ a.meta }}</div></div>
-                <button class="btn btn-sm" :class="{'btn-pri':a.primary}" @click="a.tag==='对标高表现'?openExtractionPlan():go(a.page)">{{ a.button }}</button>
+                <button class="btn btn-sm" :class="{'btn-pri':a.primary}" @click="a.tag==='对标高表现'?openExtractionPlan(a.signal_id):go(a.page)">{{ a.button }}</button>
               </div>
             </div>
           </div>
@@ -118,7 +132,7 @@
               </div>
               <div class="chat-input">
                 <input class="input" v-model="cmd" placeholder="输入指令（语音快速指令仅创建草稿，不修改正式档案）" @keydown.enter="sendCmd()">
-                <button class="btn" title="语音快速指令" @click="toast('快速指令模式：语音仅创建草稿任务，不会修改正式档案','warn')">🎙</button>
+                <button class="btn" :class="{'btn-danger':listening}" :title="listening?'停止语音输入':'语音快速指令'" @click="startVoiceCommand">{{ listening ? '■' : '🎙' }}</button>
                 <button class="btn btn-pri" @click="sendCmd()">发送</button>
               </div>
             </div>
@@ -133,6 +147,7 @@
                 <span class="badge" :class="x.cls">{{ x.tag }}</span>
                 <span><span v-html="x.html"></span><div class="mini-note">{{ x.note }}</div></span>
               </div>
+              <div class="empty" v-if="!signals.length">暂无达到展示条件的真实变化。连接账号并完成至少两次同步后，这里会显示趋势证据。</div>
             </div>
           </div>
           <div class="card section-gap">
@@ -162,6 +177,8 @@
         profile: null, versions: [], candidates: [], corpus: [], style: {},
         topics: [], sessions: [], activeSession: null, answer: '',
         recording: false, mediaRecorder: null, finishing: false,
+        versionOpen: false, versionSaving: false, versionError: null,
+        versionDraft: {}, versionReason: '',
       };
     },
     async mounted() { await this.load(); },
@@ -254,6 +271,30 @@
         try { const r = await api.post('/api/profile/versions/' + v.id + '/activate'); toast('已激活 ' + v.version_no); await this.load(); }
         catch (e) { handleError(e); }
       },
+      openVersionEditor() {
+        const content = this.profile && this.profile.content ? this.profile.content : {};
+        this.versionDraft = {
+          ip_name: content.ip_name || '', positioning: content.positioning || '',
+          audience: content.audience || '', value: content.value || '',
+          pillars_text: (content.pillars || []).join('、'), key_opinion: content.key_opinion || '',
+          monetization: content.monetization || '', banned_words_text: (content.banned_words || []).join('、'),
+        };
+        this.versionReason = ''; this.versionError = null; this.versionOpen = true;
+        this.$nextTick(() => document.getElementById('profileVersionReason')?.focus());
+      },
+      async saveVersion() {
+        if (!this.versionReason.trim()) { this.versionError = { code: 'VALIDATION_FAILED', message: '请填写本次修改原因。' }; return; }
+        this.versionSaving = true; this.versionError = null;
+        try {
+          const content = { ...this.profile.content, ...this.versionDraft };
+          content.pillars = this.versionDraft.pillars_text.split(/[、,，]/).map((x) => x.trim()).filter(Boolean);
+          content.banned_words = this.versionDraft.banned_words_text.split(/[、,，]/).map((x) => x.trim()).filter(Boolean);
+          delete content.pillars_text; delete content.banned_words_text;
+          const result = await api.post('/api/profile/versions', { content, reason: this.versionReason.trim(), activate: true });
+          this.versionOpen = false; await this.load(); toast(result.note);
+        } catch (e) { this.versionError = e; }
+        this.versionSaving = false;
+      },
     },
     computed: {
       pendingCandidates() { return this.candidates.filter((c) => c.status === 'pending'); },
@@ -263,7 +304,7 @@
     <section>
       <div class="page-head">
         <div><div class="page-title">IP档案</div><div class="page-q">我是谁，我为谁创作，我通常怎么表达？</div></div>
-        <div><button class="btn" @click="toast('正式修改将生成不可变版本，需逐项确认后激活','warn')">创建新版本</button>
+        <div><button class="btn" id="createProfileVersionBtn" @click="openVersionEditor">创建新版本</button>
           <button class="btn btn-pri" @click="startInterview('完整建档','text')">开始访谈</button></div>
       </div>
 
@@ -369,7 +410,7 @@
         </div>
         <div class="card">
           <div class="card-head"><div class="card-title">表达画像 <span class="badge b-vio">可编辑建议 · 非不可变事实</span></div>
-            <button class="btn btn-sm" @click="toast('表达画像修改将生成新版本并记录原因')">编辑</button></div>
+            <button class="btn btn-sm" @click="openVersionEditor">编辑档案</button></div>
           <div class="card-body" style="padding-top:4px"><div class="style-grid">
             <div class="style-item" v-for="(v,k) in style" :key="k"><span>{{ k }} <span class="mini-note">· {{ v.src }}</span></span><b>{{ v.value }}</b></div>
           </div></div>
@@ -388,36 +429,111 @@
           </tr>
         </table></div>
       </div>
+
+      <div class="modal profile-version-modal" :class="{open:versionOpen}" role="dialog" aria-modal="true" aria-labelledby="profileVersionTitle" @click.self="versionOpen=false">
+        <div class="modal-card">
+          <div class="modal-head"><div class="modal-title" id="profileVersionTitle">创建 IP 档案新版本</div><button class="modal-x" aria-label="关闭" @click="versionOpen=false">×</button></div>
+          <div class="modal-body">
+            <div class="callout c-info"><span>版本</span><span>保存会创建新的不可变版本并立即激活；旧版本保留在下方，可随时切回。</span></div>
+            <div class="grid g2"><label class="field"><span>IP 名称</span><input class="input" v-model="versionDraft.ip_name"></label><label class="field"><span>核心价值</span><input class="input" v-model="versionDraft.value"></label></div>
+            <label class="field"><span>当前定位</span><textarea class="input" rows="2" v-model="versionDraft.positioning"></textarea></label>
+            <label class="field"><span>目标用户</span><textarea class="input" rows="2" v-model="versionDraft.audience"></textarea></label>
+            <label class="field"><span>内容支柱（顿号分隔）</span><input class="input" v-model="versionDraft.pillars_text"></label>
+            <label class="field"><span>代表观点</span><textarea class="input" rows="2" v-model="versionDraft.key_opinion"></textarea></label>
+            <div class="grid g2"><label class="field"><span>转化方向</span><input class="input" v-model="versionDraft.monetization"></label><label class="field"><span>禁用表达（顿号分隔）</span><input class="input" v-model="versionDraft.banned_words_text"></label></div>
+            <label class="field"><span>修改原因（必填）</span><input class="input" id="profileVersionReason" v-model="versionReason" placeholder="例如：根据近 30 天数据调整目标用户"></label>
+            <div class="inline-error" role="alert" v-if="versionError"><b>{{ versionError.code }}</b><span>{{ versionError.message }}</span></div>
+          </div>
+          <div class="modal-foot"><button class="btn" @click="versionOpen=false">取消</button><button class="btn btn-pri" :disabled="versionSaving" @click="saveVersion">{{ versionSaving ? '保存中…' : '创建并激活版本' }}</button></div>
+        </div>
+      </div>
     </section>`,
   };
 
   /* ================= 账号运营 ================= */
   window.PageAccount = {
-    data() { return { accounts: [], cycle: null, suggestions: [], snapshots: [], fanSeries: '' }; },
-    async mounted() { await this.load(); },
+    data() {
+      return {
+        accounts: [], cycle: null, suggestions: [], datasource: { platforms: [] },
+        selected: null, snapshots: [], fanSeries: '', fanArea: '',
+        addOpen: false, adding: false, addError: null, lastResult: null,
+        cycleOpen: false, cycleSaving: false, cycleDraft: {},
+        form: { platform: 'douyin', link: '', display_name: '', source_mode: 'provider', sync_frequency: '每 6 小时' },
+      };
+    },
+    computed: {
+      platformOptions() { return this.datasource.platforms || []; },
+      selectedPlatform() {
+        return this.platformOptions.find((item) => item.id === this.form.platform)
+          || { label: '账号', id_label: '主页链接 / 平台 ID', placeholder: '粘贴账号主页链接或输入平台 ID' };
+      },
+    },
+    async mounted() {
+      await this.load();
+      const params = new URLSearchParams(location.search);
+      if (params.get('account') === 'add') {
+        this.openAdd({ platform: params.get('platform'), link: params.get('link') });
+        ['account', 'platform', 'link'].forEach((key) => params.delete(key));
+        const query = params.toString();
+        history.replaceState({}, '', location.pathname + (query ? '?' + query : '') + location.hash);
+      }
+    },
     methods: {
       async load() {
         try {
-          const [a, c, s] = await Promise.all([
+          const [a, c, s, ds] = await Promise.all([
             api.get('/api/accounts'), api.get('/api/accounts/cycle/current'),
-            api.get('/api/accounts/suggestions/list'),
+            api.get('/api/accounts/suggestions/list'), api.get('/api/datasource/status'),
           ]);
-          this.accounts = a; this.cycle = c; this.suggestions = s;
-          const dy = a.find((x) => x.id === 'acc-dy');
-          if (dy) {
-            this.snapshots = await api.get('/api/accounts/' + dy.id + '/snapshots');
-            this.renderFanSeries();
-          }
+          this.accounts = a; this.cycle = c; this.suggestions = s; this.datasource = ds;
+          if (this.selected) {
+            const current = a.find((item) => item.id === this.selected.id);
+            if (current) await this.openAccount(current);
+            else this.closeAccount();
+          } else if (a.length) await this.openAccount(a[0], false);
         } catch (e) { handleError(e); }
       },
+      openAdd(prefill) {
+        const data = prefill || {};
+        const platform = this.platformOptions.some((item) => item.id === data.platform) ? data.platform : 'douyin';
+        this.form = { platform, link: data.link || '', display_name: '', source_mode: 'provider', sync_frequency: '每 6 小时' };
+        this.addError = null; this.addOpen = true;
+        this.$nextTick(() => document.getElementById('ownAccountLinkInput')?.focus());
+      },
+      async addAccount() {
+        if (!this.form.link.trim()) {
+          this.addError = { code: 'VALIDATION_FAILED', message: '请填写账号主页链接或平台账号 ID。' }; return;
+        }
+        this.adding = true; this.addError = null;
+        try {
+          const result = await api.post('/api/accounts', { ...this.form, link: this.form.link.trim() });
+          this.lastResult = result;
+          await this.load();
+          this.addOpen = false;
+          const added = this.accounts.find((item) => item.id === result.id);
+          if (added) await this.openAccount(added);
+          toast(result.note);
+          refreshTopbar();
+        } catch (error) { this.addError = error; }
+        this.adding = false;
+      },
+      async openAccount(account, scroll = true) {
+        try {
+          this.selected = await api.get('/api/accounts/' + encodeURIComponent(account.id));
+          this.snapshots = this.selected.snapshots || [];
+          this.renderFanSeries();
+          if (scroll) this.$nextTick(() => document.getElementById('accountDetail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+        } catch (e) { handleError(e); }
+      },
+      closeAccount() { this.selected = null; this.snapshots = []; this.fanSeries = ''; this.fanArea = ''; },
       renderFanSeries() {
         const pts = this.snapshots.slice(-10);
-        if (!pts.length) return;
+        if (!pts.length) { this.fanSeries = ''; this.fanArea = ''; return; }
         const min = Math.min(...pts.map((p) => p.followers));
         const max = Math.max(...pts.map((p) => p.followers));
         const W = 220, H = 64;
         const coords = pts.map((p, i) => {
-          const x = (i / (pts.length - 1)) * W;
+          const x = pts.length === 1 ? W / 2 : (i / (pts.length - 1)) * W;
           const y = H - 14 - ((p.followers - min) / (max - min || 1)) * (H - 24);
           return `${x.toFixed(0)},${y.toFixed(0)}`;
         });
@@ -428,18 +544,52 @@
         try {
           const r = await api.post('/api/accounts/' + acc.id + '/sync');
           if (r.manual) { toast(r.note, 'warn'); return; }
-          toast('同步任务已创建（公开元数据 · 免费额度内）');
-          setTimeout(async () => {
-            await this.load(); refreshTopbar();
-          }, 2500);
+          acc.status = 'syncing';
+          toast(r.note);
+          await this.waitJob(r.job_id);
         } catch (e) { handleError(e); }
       },
-      async fixError(acc) {
-        toast('请在「系统设置 → 数据来源」中更新 TikHub API Key 后手动重试', 'warn');
-        go('settings');
+      async waitJob(jobId) {
+        for (let i = 0; i < 80; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const job = await api.get('/api/jobs/' + encodeURIComponent(jobId));
+          if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(job.status)) {
+            await this.load(); refreshTopbar();
+            if (job.status === 'SUCCEEDED') toast('账号同步完成，资料与今日快照已刷新');
+            else handleError(job.error_json || { code: 'ACCOUNT_SYNC_FAILED', message: '账号同步失败', trace_id: job.trace_id });
+            return;
+          }
+        }
+        toast('同步仍在后台执行，可稍后刷新查看结果', 'warn');
+      },
+      fixError() { location.href = '/?settings=source#/settings'; },
+      async saveFrequency() {
+        if (!this.selected) return;
+        try {
+          const result = await api.patch('/api/accounts/' + encodeURIComponent(this.selected.id), { sync_frequency: this.selected.sync_frequency });
+          this.selected = { ...this.selected, ...result.account }; await this.load(); toast(result.note);
+        } catch (e) { handleError(e); }
+      },
+      async removeAccount(account) {
+        if (!confirm(`确认删除自有账号「${account.display_name || account.handle}」及其本地快照？`)) return;
+        try { const result = await api.delete('/api/accounts/' + encodeURIComponent(account.id)); this.lastResult = null; await this.load(); toast(result.note, 'warn'); refreshTopbar(); }
+        catch (e) { handleError(e); }
+      },
+      openCycle() { this.cycleDraft = { ...this.cycle }; this.cycleOpen = true; },
+      async saveCycle() {
+        this.cycleSaving = true;
+        try {
+          const result = await api.post('/api/accounts/cycle/current', {
+            goal: this.cycleDraft.goal, platforms: this.cycleDraft.platforms,
+            hours_per_week: Number(this.cycleDraft.hours_per_week), complexity: this.cycleDraft.complexity,
+            promotion: this.cycleDraft.promotion, rhythm: this.cycleDraft.rhythm,
+          });
+          this.cycle = result.cycle; this.cycleOpen = false; toast(result.note);
+        } catch (e) { handleError(e); }
+        this.cycleSaving = false;
       },
       async setRhythm(r) {
-        try { await api.post('/api/accounts/cycle/current', { rhythm: r }); this.cycle.rhythm = r; toast('更新节奏已调整（创建周期新版本）'); }
+        try { const result = await api.post('/api/accounts/cycle/current', { rhythm: r }); this.cycle = result.cycle; toast('更新节奏已保存'); }
         catch (e) { handleError(e); }
       },
     },
@@ -447,39 +597,60 @@
     <section>
       <div class="page-head">
         <div><div class="page-title">账号运营</div><div class="page-q">我的账号现在是什么状态，这个周期应该怎么运营？</div></div>
-        <button class="btn btn-pri" @click="toast('添加账号：输入链接或平台 ID → 绑定数据源 → 设置同步频率')">+ 添加账号</button>
+        <button class="btn btn-pri" id="addOwnAccountBtn" @click="openAdd">+ 添加账号</button>
       </div>
 
-      <div class="grid g2 section-gap">
+      <div class="callout c-ok section-gap" role="status" aria-live="polite" v-if="lastResult">
+        <span>✓</span><span><b>{{ lastResult.account.display_name }}</b> 已出现在账号列表中 · {{ lastResult.account.platform_label }} · {{ lastResult.account.sync_frequency }}同步
+        <button class="text-btn" @click="openAccount(lastResult.account)">查看账号结果</button></span>
+      </div>
+
+      <div class="empty section-gap" v-if="!accounts.length"><b>还没有绑定自有账号</b><span>添加主页链接后，系统会解析公开资料并建立可追踪快照；失败会展示真实原因。</span><button class="btn btn-pri" @click="openAdd">添加第一个账号</button></div>
+
+      <div class="grid g2 section-gap" v-else>
         <div class="card" v-for="a in accounts" :key="a.id" :style="a.status==='error'?'border-color:var(--err-line)':''">
           <div class="card-body" style="padding:14px 16px">
             <div style="display:flex;justify-content:space-between;align-items:center">
-              <div><b>{{ a.platform }}</b> <span style="color:var(--ink3)">{{ a.handle }}</span>
-                <span class="badge b-neu" v-if="a.note && a.note.includes('重点')">重点平台</span></div>
+              <div><b>{{ a.platform_label }}</b> <span style="color:var(--ink3)">{{ a.display_name }}</span></div>
               <span class="badge b-ok" v-if="a.status==='ok'">同步正常</span>
-              <span class="badge b-err" v-else-if="a.status==='error'">同步失败 ×3</span>
-              <span class="badge b-neu" v-else>手动导入</span>
+              <span class="badge b-warn" v-else-if="a.status==='syncing'">同步中</span>
+              <span class="badge b-err" v-else-if="a.status==='error'">同步失败</span>
+              <span class="badge b-neu" v-else>手动账号</span>
             </div>
             <div class="callout c-err" style="margin:10px 0" v-if="a.status==='error'">
-              <span>✕</span><span style="font-size:11.5px"><b>{{ a.extra.error_code }}</b> · API Key 已失效（401）<br>
-              自动重试已停止，<b>系统未返回任何假数据</b>。
-              <span class="trace" @click="bus.emit('open-error',{code:a.extra.error_code,message:a.note,stage:'account_sync',provider:'tikhub',retryable:false,trace_id:a.extra.trace_id,details:{charged:false,fix:'① 更新 API Key → ② 手动重试同步'}})">Trace {{ a.extra.trace_id.slice(0,12) }}…</span></span>
+              <span>✕</span><span style="font-size:11.5px"><b>{{ a.extra.error_code || 'ACCOUNT_SYNC_FAILED' }}</b> · {{ a.note }}<br><b>系统未返回任何替代数据。</b>
+              <span class="trace" v-if="a.extra.trace_id" @click="bus.emit('open-error',{code:a.extra.error_code,message:a.note,stage:'account_sync',provider:a.bound_provider,retryable:false,trace_id:a.extra.trace_id,details:{charged:false}})">Trace {{ a.extra.trace_id.slice(0,12) }}…</span></span>
             </div>
             <div style="display:flex;gap:20px;margin:10px 0;font-size:12px;color:var(--ink2)">
               <span>粉丝 <b style="color:var(--ink)">{{ a.followers.toLocaleString() }}</b></span>
-              <span>{{ a.sync_frequency }} 同步</span>
+              <span>{{ a.sync_frequency }}</span>
               <span v-if="a.last_sync_at">最近同步 {{ a.last_sync_at.slice(5,16).replace('T',' ') }}</span>
             </div>
             <div style="display:flex;gap:6px">
-              <template v-if="a.status==='error'">
-                <button class="btn btn-sm btn-pri" @click="fixError(a)">修复配置</button>
-                <button class="btn btn-sm" @click="sync(a)">重试同步</button>
-              </template>
-              <template v-else>
-                <button class="btn btn-sm" @click="sync(a)">手动同步</button>
-                <button class="btn btn-sm btn-ghost" @click="go('packages')">导入后台数据</button>
-              </template>
+              <button class="btn btn-sm btn-pri" @click="openAccount(a)">查看数据</button>
+              <button class="btn btn-sm" v-if="a.status==='error'" @click="fixError">修复配置</button>
+              <button class="btn btn-sm" v-if="a.bound_provider!=='manual'" :disabled="a.status==='syncing'" @click="sync(a)">{{ a.status==='error' ? '重试同步' : '立即同步' }}</button>
+              <button class="btn btn-sm" v-else @click="go('packages')">导入后台数据</button>
+              <button class="btn btn-sm btn-ghost" @click="removeAccount(a)">删除</button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card section-gap" id="accountDetail" v-if="selected">
+        <div class="card-head"><div class="card-title">{{ selected.display_name }} · 账号数据 <span class="badge b-ok" v-if="selected.status==='ok'">真实快照</span></div><button class="btn btn-sm" @click="closeAccount">收起</button></div>
+        <div class="card-body">
+          <div class="grid g3">
+            <div><div class="dt">平台与账号 ID</div><div class="dd">{{ selected.platform_label }} · {{ selected.extra.uid }}</div></div>
+            <div><div class="dt">公开资料</div><div class="dd">粉丝 {{ selected.followers.toLocaleString() }} · 作品 {{ selected.video_count.toLocaleString() }}</div></div>
+            <div><div class="dt">数据来源</div><div class="dd">{{ selected.bound_provider }} · {{ selected.last_sync_at ? selected.last_sync_at.replace('T',' ') : '尚未同步' }}</div></div>
+          </div>
+          <p class="mini-note" v-if="selected.bio">简介：{{ selected.bio }}</p>
+          <p v-if="selected.homepage"><a class="text-btn" :href="selected.homepage" target="_blank" rel="noreferrer">打开原账号主页 ↗</a></p>
+          <div class="settings-actions"><label class="field" style="max-width:260px"><span>同步频率</span><select class="input" v-model="selected.sync_frequency"><option>每 1 小时</option><option>每 3 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天</option><option>仅手动</option></select></label><button class="btn" @click="saveFrequency">保存频率</button></div>
+          <div class="grid g2 section-gap">
+            <div><div class="card-title">粉丝快照</div><svg viewBox="0 0 220 64" style="width:100%;margin-top:10px" v-if="snapshots.length>1"><polygon :points="fanArea" fill="rgba(228,87,46,.12)"/><polyline :points="fanSeries" fill="none" stroke="#E4572E" stroke-width="2" stroke-linecap="round"/></svg><div class="callout c-info" style="margin-top:10px" v-else-if="snapshots.length===1"><span>首个快照</span><span><b>{{ Number(snapshots[0].followers||0).toLocaleString() }}</b> 粉丝；再次同步后显示趋势，不用单点伪造曲线。</span></div><div class="empty" v-else>尚无快照</div></div>
+            <div><div class="card-title">快照记录</div><div class="kv-row" v-for="ss in snapshots.slice().reverse().slice(0,6)" :key="ss.id"><span>{{ ss.date }}</span><b>{{ Number(ss.followers||0).toLocaleString() }} 粉丝 · {{ ss.posts || 0 }} 作品</b></div><div class="empty" v-if="!snapshots.length">同步成功后在这里显示</div></div>
           </div>
         </div>
       </div>
@@ -487,7 +658,7 @@
       <div class="grid g2 section-gap" v-if="cycle">
         <div class="card">
           <div class="card-head"><div class="card-title">当前运营周期 <span class="badge b-pri">{{ cycle.name }}</span></div>
-            <button class="btn btn-sm" @click="toast('周期修改将创建新版本（运营周期包为不可变版本）')">调整</button></div>
+            <button class="btn btn-sm" id="editCycleBtn" @click="openCycle">调整</button></div>
           <div class="card-body" style="padding-top:6px">
             <div class="kv-row"><span>核心目标</span><b>{{ cycle.goal }}</b></div>
             <div class="kv-row"><span>重点平台</span><b>{{ cycle.platforms }}</b></div>
@@ -507,28 +678,6 @@
         </div>
       </div>
 
-      <div class="grid g3 section-gap">
-        <div class="card"><div class="card-head"><div class="card-title">粉丝趋势 <span class="card-sub">抖音 · 近 12 周</span></div></div>
-          <div class="card-body">
-            <svg viewBox="0 0 220 64" style="width:100%">
-              <defs><linearGradient id="gf" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stop-color="#E4572E" stop-opacity=".25"/><stop offset="1" stop-color="#E4572E" stop-opacity="0"/>
-              </linearGradient></defs>
-              <polygon :points="fanArea" fill="url(#gf)"/>
-              <polyline :points="fanSeries" fill="none" stroke="#E4572E" stroke-width="2" stroke-linecap="round"/>
-            </svg>
-            <div class="mini-note" style="margin-top:6px">数据来源 {{ store.runtime.demo_mode ? 'demo_tikhub 演示快照（每日）' : 'TikHub 快照（每日）' }}</div>
-          </div></div>
-        <div class="card"><div class="card-head"><div class="card-title">发布频率 <span class="card-sub">近 8 周 · 计划 4 条/周</span></div></div>
-          <div class="card-body"><div class="bars">
-            <div class="bar" v-for="w in [90,90,68,90,90,45,90,45]" :key="Math.random()"><i :style="{'--h':w+'%'}" :class="{dim:w===45}"></i><span>W</span></div>
-          </div>
-          <div class="mini-note" style="margin-top:6px">高于平均作品 3 · 低于平均 2</div></div></div>
-        <div class="card"><div class="card-head"><div class="card-title">内容方向分布 <span class="card-sub">近 30 天发布</span></div></div>
-          <div class="card-body" style="display:flex;gap:16px;align-items:center"><div class="donut"></div>
-          <div class="legend"><div><i style="background:var(--pri)"></i>汇报表达 35%</div><div><i style="background:var(--info)"></i>向上管理 30%</div><div><i style="background:#D97706"></i>职业选择 20%</div><div><i style="background:#B9B6AE"></i>个人工作流 15%</div></div></div></div>
-      </div>
-
       <div class="card">
         <div class="card-head"><div class="card-title">运营建议 <span class="card-sub">每条建议必须显示依据</span></div></div>
         <div class="card-body" style="padding-top:4px">
@@ -536,6 +685,39 @@
             <span class="badge" :class="sg.cls">{{ sg.tag }}</span>
             <span style="flex:1">{{ sg.text }}<div class="mini-note">{{ sg.basis }}</div></span>
           </div>
+        </div>
+      </div>
+
+      <div class="modal own-account-add-modal" :class="{open:addOpen}" role="dialog" aria-modal="true" aria-labelledby="ownAccountAddTitle" @click.self="addOpen=false">
+        <div class="modal-card">
+          <div class="modal-head"><div class="modal-title" id="ownAccountAddTitle">添加自有账号</div><button class="modal-x" aria-label="关闭" @click="addOpen=false">×</button></div>
+          <div class="modal-body">
+            <div class="callout c-info"><span>1</span><span>填写主页链接或平台 ID；系统会先解析公开资料，成功后才写入账号列表和首条快照。</span></div>
+            <div class="platform-support"><button v-for="platform in platformOptions" :key="platform.id" type="button" class="platform-support-item" :class="{active:form.platform===platform.id}" @click="form.platform=platform.id">{{ platform.label }}</button></div>
+            <div class="grid g2">
+              <label class="field"><span>平台</span><select class="input" id="ownAccountPlatform" v-model="form.platform"><option v-for="platform in platformOptions" :key="platform.id" :value="platform.id">{{ platform.group }} · {{ platform.label }}</option></select></label>
+              <label class="field"><span>数据方式</span><select class="input" v-model="form.source_mode"><option value="provider">TikHub 公开数据（推荐）</option><option value="manual">手动导入后台数据</option></select></label>
+            </div>
+            <label class="field"><span>{{ selectedPlatform.id_label }}</span><input class="input" id="ownAccountLinkInput" v-model="form.link" :placeholder="selectedPlatform.placeholder" @keyup.enter="addAccount"><small v-if="form.source_mode==='provider'">会执行一次真实账号解析与概况读取，可能产生接口费用。</small><small v-else>仅建立入口，不生成粉丝数等猜测数据。</small></label>
+            <label class="field" v-if="form.source_mode==='manual'"><span>显示名称（可选）</span><input class="input" v-model="form.display_name" placeholder="例如：见舟AI"></label>
+            <label class="field"><span>同步频率</span><select class="input" id="ownAccountSyncFrequency" v-model="form.sync_frequency" :disabled="form.source_mode==='manual'"><option>每 1 小时</option><option>每 3 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天</option><option>仅手动</option></select></label>
+            <div class="inline-error" role="alert" v-if="addError"><b>{{ addError.code }}</b><span>{{ addError.message }}</span><button class="text-btn" v-if="addError.code==='CONFIG_MISSING_API_KEY'" @click="addOpen=false;fixError()">前往系统设置</button></div>
+          </div>
+          <div class="modal-foot"><button class="btn" :disabled="adding" @click="addOpen=false">取消</button><button class="btn btn-pri" id="confirmAddOwnAccountBtn" :disabled="adding" @click="addAccount">{{ adding ? '正在解析并绑定…' : '解析并添加账号' }}</button></div>
+        </div>
+      </div>
+
+      <div class="modal account-cycle-modal" v-if="cycle" :class="{open:cycleOpen}" role="dialog" aria-modal="true" aria-labelledby="accountCycleTitle" @click.self="cycleOpen=false">
+        <div class="modal-card">
+          <div class="modal-head"><div class="modal-title" id="accountCycleTitle">调整运营周期</div><button class="modal-x" aria-label="关闭" @click="cycleOpen=false">×</button></div>
+          <div class="modal-body">
+            <label class="field"><span>核心目标</span><input class="input" v-model="cycleDraft.goal"></label>
+            <div class="grid g2"><label class="field"><span>重点平台</span><input class="input" v-model="cycleDraft.platforms"></label><label class="field"><span>每周可投入（小时）</span><input class="input" type="number" min="0" max="168" v-model.number="cycleDraft.hours_per_week"></label></div>
+            <label class="field"><span>更新节奏</span><select class="input" v-model="cycleDraft.rhythm"><option v-for="r in cycle.rhythms" :key="r">{{ r }}</option></select></label>
+            <label class="field"><span>可接受制作复杂度</span><input class="input" v-model="cycleDraft.complexity"></label>
+            <label class="field"><span>推广与实验</span><input class="input" v-model="cycleDraft.promotion"></label>
+          </div>
+          <div class="modal-foot"><button class="btn" @click="cycleOpen=false">取消</button><button class="btn btn-pri" :disabled="cycleSaving" @click="saveCycle">{{ cycleSaving ? '保存中…' : '保存周期' }}</button></div>
         </div>
       </div>
     </section>`,

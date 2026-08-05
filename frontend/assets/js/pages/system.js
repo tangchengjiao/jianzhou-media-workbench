@@ -154,6 +154,7 @@
         testingSource: false, testingLlm: false, testingAsr: false, loadingModels: false,
         sourceTest: { platform: 'douyin', link: '' },
         sourceResult: null, llmResult: null, asrResult: null, asrFile: null, availableModels: [],
+        saveResult: null,
         secretDrafts: { source: '', llm: '', voice: '' },
         tabs: [
           ['execution', '运行模式'], ['source', '数据来源'], ['llm', '大模型'], ['voice', '语音模型'],
@@ -200,6 +201,13 @@
           this.secretDrafts[section] = '';
           await this.load();
           if (section === 'execution') store.runtime.demo_mode = r.demo_mode;
+          const summaries = {
+            source: `TikHub · ${this.settings.datasource.providers.tikhub.baseUrl} · Key ${this.settings.source.tikhub_api_key_configured ? '已配置' : '未配置'}`,
+            llm: `${this.settings.llm.api_base} · ${this.settings.llm.fast_model}`,
+            voice: `${this.settings.voice.api_base} · ${this.settings.voice.asr_model}`,
+            execution: this.settings.execution.mode === 'real' ? '真实 Provider 模式' : '演示模式',
+          };
+          this.saveResult = { section, note: r.note, summary: summaries[section] || '本分区配置已写入本机数据库', at: new Date().toLocaleTimeString() };
           if (showToast) toast(r.note);
           this.saving = false;
           return true;
@@ -224,6 +232,14 @@
           toast(this.sourceResult.note);
         } catch (e) { handleError(e); }
         this.testingSource = false;
+      },
+      openAccountFromSource() {
+        const q = new URLSearchParams({ account: 'add', platform: this.sourceTest.platform, link: this.sourceTest.link.trim() });
+        location.href = '/?' + q.toString() + '#/account';
+      },
+      openBenchmarkFromSource() {
+        const q = new URLSearchParams({ radar: 'add', platform: this.sourceTest.platform, link: this.sourceTest.link.trim() });
+        location.href = '/?' + q.toString() + '#/radar';
       },
       async loadModels() {
         if (!(await this.save('llm', false))) return;
@@ -298,6 +314,10 @@
           <span class="badge b-err" v-if="t[0]==='diag' && errors.length" style="margin-left:2px">{{ errors.length }}</span></button>
       </div>
 
+      <div class="callout c-ok section-gap" role="status" aria-live="polite" v-if="saveResult && saveResult.section===tab">
+        <span>✓</span><span><b>已保存并生效</b> · {{ saveResult.at }}<br>{{ saveResult.summary }}<small style="display:block">{{ saveResult.note }}</small></span>
+      </div>
+
       <div class="settings-mode-grid section-gap" v-if="tab==='execution' && settings.execution">
         <button type="button" class="settings-mode-card" :class="{active:settings.execution.mode==='demo'}" :aria-pressed="settings.execution.mode==='demo'" @click="setMode('demo')">
           <span class="settings-mode-check">{{ settings.execution.mode==='demo' ? '✓' : '' }}</span><b>演示模式</b><small>使用明确标记的内置数据，不产生外部调用费用。</small>
@@ -322,7 +342,11 @@
             <label class="field"><span>公开账号主页 / 账号 ID</span><input class="input" v-model="sourceTest.link" placeholder="用于真实解析和账号资料测试"><small>不会再使用无效的 check_probe。</small></label>
           </div>
           <div class="settings-actions"><button class="btn btn-pri" :disabled="saving" @click="save('source')">保存数据源</button><button class="btn" :disabled="testingSource||saving" @click="testSource">{{ testingSource ? '正在测试…' : '保存并真实测试' }}</button></div>
-          <div class="callout c-ok" role="status" aria-live="polite" v-if="sourceResult"><span>✓</span><span>{{ sourceResult.note }}<template v-if="sourceResult.account_name"> · 账号：{{ sourceResult.account_name }}</template></span></div>
+          <div class="callout c-ok" role="status" aria-live="polite" v-if="sourceResult"><span>✓</span><span style="flex:1"><b>{{ sourceResult.note }}</b><br>
+            已解析：{{ sourceResult.account_name || sourceResult.uid }} · {{ sourceResult.platform }} · {{ Number(sourceResult.fans||0).toLocaleString() }} 粉丝 · {{ Number(sourceResult.video_count||0).toLocaleString() }} 作品
+            <small style="display:block" v-if="sourceResult.bio">{{ sourceResult.bio }}</small>
+            <span class="settings-actions" style="margin-top:8px"><button class="btn btn-sm btn-pri" @click="openAccountFromSource">带入“账号运营”添加</button><button class="btn btn-sm" @click="openBenchmarkFromSource">带入“对标账号”添加</button></span>
+          </span></div>
         </div>
       </div>
 

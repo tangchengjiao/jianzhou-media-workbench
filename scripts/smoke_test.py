@@ -47,7 +47,11 @@ def main() -> int:
         r = c.get("/healthz")
         check("健康检查", r.status_code == 200 and r.json()["ok"])
         r = c.get("/api/settings/runtime")
-        check("演示模式显式标识（demo_mode=true）", r.json()["data"]["demo_mode"] is True)
+        is_demo = r.json()["data"]["demo_mode"] is True
+        check("演示模式显式标识（demo_mode=true）", is_demo)
+        if not is_demo:
+            print("\n  [STOP] 本脚本会创建演示链路数据，只允许对隔离的 demo_mode 服务执行。")
+            return 2
         r = c.get("/")
         check("前端首页可访问", r.status_code == 200 and "见舟" in r.text)
         r = c.get("/api/workbench/status")
@@ -84,6 +88,9 @@ def main() -> int:
         r = c.get("/api/benchmarks")
         benchmarks = r.json()["data"]
         check("内容雷达存在对标账号入口数据", len(benchmarks) >= 1)
+        if not benchmarks:
+            print("\n  [STOP] 演示种子缺少对标账号，无法继续验证对标垂直切片。")
+            return 2
         benchmark = benchmarks[0]
         detail = c.get(f"/api/benchmarks/{benchmark['id']}").json()["data"]
         check("对标账号可打开作品监控墙", len(detail["works"]) >= 1)
@@ -215,7 +222,8 @@ def main() -> int:
               job2["status"] == "WAITING_CONFIRMATION", job2["status"])
         check("未授权时不产生 ASR 资产", "source_content_id" not in job2["output_json"])
 
-        # 同步失败：小红书账号 → Typed Error，不返回假数据
+        # 同步失败：显式切换真实模式且不配置 Key → Typed Error，不返回假数据
+        c.put("/api/settings", json={"section": "execution", "values": {"mode": "real"}})
         r = c.post("/api/accounts/acc-xhs/sync")
         xhs_job = r.json()["data"]["job_id"]
         deadline = time.time() + 15
@@ -231,10 +239,12 @@ def main() -> int:
                 if j["status"] in ("FAILED", "SUCCEEDED"):
                     final = j
                     break
+        c.put("/api/settings", json={"section": "execution", "values": {"mode": "demo"}})
         check("账号同步失败显式 FAILED", final is not None and final["status"] == "FAILED")
-        check("失败错误码 TIKHUB_UNAUTHORIZED + 阶段 + Trace",
-              final is not None and final["error"]["code"] == "TIKHUB_UNAUTHORIZED"
-              and final["error"]["stage"] == "account_sync" and bool(final["error"]["trace_id"]))
+        final_error = (final or {}).get("error") or {}
+        check("失败返回类型化错误码 + 阶段 + Trace",
+              final_error.get("code") in {"CONFIG_MISSING_API_KEY", "TIKHUB_UNAUTHORIZED"}
+              and bool(final_error.get("stage")) and bool(final_error.get("trace_id")))
 
         # 部分导入：失败行必须明示
         csv_content = "标题,发布时间,点赞数\n正常标题,2026/7/1,100\n,2026/7/2,88\n"

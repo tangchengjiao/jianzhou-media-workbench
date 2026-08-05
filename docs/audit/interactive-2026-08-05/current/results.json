@@ -1,0 +1,64 @@
+{
+  "mode": "isolated-demo-interaction",
+  "browser": "Chrome",
+  "base_url": "http://127.0.0.1:49272",
+  "passed": 11,
+  "failed": 0,
+  "results": [
+    {
+      "name": "全站导航逐项点击、分组只由用户主动收起",
+      "status": "PASS",
+      "seconds": 6.26
+    },
+    {
+      "name": "工作总台：快捷指令调用后端并返回可执行动作",
+      "status": "PASS",
+      "seconds": 0.75
+    },
+    {
+      "name": "账号运营：弹窗输入→解析→落库→卡片/详情/快照→周期保存",
+      "status": "PASS",
+      "seconds": 3.75
+    },
+    {
+      "name": "内容雷达：添加对标→自填条数→作品墙→作者分析",
+      "status": "PASS",
+      "seconds": 3.11
+    },
+    {
+      "name": "内容提取：选择真实雷达信号→生成单次确认计划",
+      "status": "PASS",
+      "seconds": 2.54
+    },
+    {
+      "name": "系统设置：保存结果→缺少 Key 显式失败→链接可带入账号添加",
+      "status": "PASS",
+      "seconds": 4.74
+    },
+    {
+      "name": "IP 档案：创建并激活不可变版本",
+      "status": "PASS",
+      "seconds": 2.78
+    },
+    {
+      "name": "IP 档案：开始访谈→提交回答→暂停并保存进度",
+      "status": "PASS",
+      "seconds": 1.84
+    },
+    {
+      "name": "内容拆解：加入表现对比组→按真实来源保存模式卡",
+      "status": "PASS",
+      "seconds": 3.67
+    },
+    {
+      "name": "键盘 Escape 关闭弹窗后可再次正常打开",
+      "status": "PASS",
+      "seconds": 1.11
+    },
+    {
+      "name": "浏览器控制台无严重错误",
+      "status": "PASS",
+      "errors": []
+    }
+  ]
+}

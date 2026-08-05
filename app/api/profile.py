@@ -2,7 +2,7 @@
 import datetime
 
 from fastapi import APIRouter, File, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..db import execute, jdumps, jloads, query, query_one
 from ..errors import not_found, state_invalid, validation_failed
@@ -50,6 +50,50 @@ def list_versions():
         "SELECT id, version_no, reason, source, created_at, active"
         " FROM profile_versions WHERE user_id=? ORDER BY created_at DESC", (uid,))
     return ok(rows)
+
+
+class ProfileVersionIn(BaseModel):
+    content: dict
+    reason: str = Field(min_length=2, max_length=300)
+    activate: bool = True
+
+
+@router.post("/versions")
+def create_version(body: ProfileVersionIn):
+    """显式创建不可变档案版本；旧版本保留，只切换 active 标记。"""
+    uid = current_user_id()
+    active = query_one("SELECT content_json FROM profile_versions WHERE user_id=? AND active=1",
+                       (uid,))
+    if not active:
+        raise not_found("激活的档案", uid)
+    previous = jloads(active["content_json"], {})
+    allowed = set(previous)
+    unknown = set(body.content) - allowed
+    if unknown:
+        raise validation_failed("档案包含未知字段：" + "、".join(sorted(unknown)))
+    content = {**previous, **body.content}
+    required = ("ip_name", "positioning", "audience", "value", "key_opinion")
+    if any(not str(content.get(key) or "").strip() for key in required):
+        raise validation_failed("IP 名称、定位、目标用户、核心价值和代表观点不能为空")
+    for key in ("pillars", "banned_words"):
+        if not isinstance(content.get(key), list):
+            raise validation_failed(f"{key} 必须是列表")
+    versions = query("SELECT version_no FROM profile_versions WHERE user_id=?", (uid,))
+    nums = []
+    for row in versions:
+        try:
+            nums.append(float(str(row["version_no"]).lstrip("v")))
+        except ValueError:
+            pass
+    version_no = f"v{(max(nums) + 0.1 if nums else 1.0):.1f}"
+    vid = new_id("pv")
+    if body.activate:
+        execute("UPDATE profile_versions SET active=0 WHERE user_id=?", (uid,))
+    execute("INSERT INTO profile_versions VALUES(?,?,?,?,?,?,?,?)",
+            (vid, uid, version_no, jdumps(content), body.reason,
+             "手动编辑", now(), 1 if body.activate else 0))
+    return ok({"id": vid, "version_no": version_no, "active": body.activate,
+               "note": f"档案版本 {version_no} 已创建" + ("并激活" if body.activate else "，等待激活")})
 
 
 @router.post("/versions/{vid}/activate")

@@ -1,15 +1,25 @@
-"""工作总台：全局状态聚合、行动队列、重要信号、操盘手指令。"""
+"""工作总台：只聚合当前用户的真实状态、行动与信号。"""
+from __future__ import annotations
+
 import datetime
+import html
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 from .. import config
-from ..db import jdumps, jloads, query, query_one
+from ..db import jloads, query, query_one
 from ..providers import get_llm_provider
 from . import current_user_id, ok, today
+from .accounts import _cycle_for_user
 
 router = APIRouter(tags=["workbench"])
+
+
+def _week_bounds() -> tuple[str, str]:
+    current = datetime.date.today()
+    start = current - datetime.timedelta(days=current.weekday())
+    return start.isoformat(), (start + datetime.timedelta(days=6)).isoformat()
 
 
 @router.get("/workbench/status")
@@ -20,29 +30,47 @@ def workbench_status():
     inventory = sum(counts.get(s, 0) for s in
                     ("SELECTED", "OUTLINING", "DRAFTING", "PRODUCING", "READY_TO_PUBLISH"))
     used_today = query_one(
-        "SELECT COALESCE(SUM(cost),0) c FROM usage_ledger WHERE ts LIKE ?",
-        (today() + "%",))["c"]
+        "SELECT COALESCE(SUM(cost),0) c FROM usage_ledger WHERE user_id=? AND ts LIKE ?",
+        (uid, today() + "%"))["c"]
     sync_alerts = query(
         "SELECT id, platform, note FROM accounts WHERE user_id=? AND status='error'", (uid,))
     active_profile = query_one(
         "SELECT version_no FROM profile_versions WHERE user_id=? AND active=1", (uid,))
     packages = query_one(
         "SELECT COUNT(*) c FROM data_packages WHERE owner_id=? AND status='active'", (uid,))["c"]
+    todo_analysis = query_one(
+        "SELECT COUNT(*) c FROM source_contents s WHERE s.user_id=? AND s.status='transcribed' "
+        "AND NOT EXISTS (SELECT 1 FROM analyses a WHERE a.user_id=? AND a.source_content_id=s.id)",
+        (uid, uid))["c"]
+    week_start, week_end = _week_bounds()
+    weekly_done = query_one(
+        "SELECT COUNT(*) c FROM publications WHERE user_id=? AND date(published_at) BETWEEN ? AND ?",
+        (uid, week_start, week_end))["c"]
+    scheduled_hours = query_one(
+        "SELECT COALESCE(SUM(estimate_h),0) c FROM content_tasks WHERE user_id=? "
+        "AND date(scheduled_date) BETWEEN ? AND ? AND status NOT IN ('PUBLISHED','CANCELLED')",
+        (uid, week_start, week_end))["c"]
+    cycle_saved = _cycle_for_user()
+    hours_total = float(cycle_saved.get("hours_per_week") or 0)
+    cycle = {
+        **cycle_saved,
+        "week": f"{week_start} 至 {week_end}",
+        "weekly_target": max(1, int(round(hours_total / 3.5))) if hours_total else 0,
+        "weekly_done": weekly_done,
+        "hours_total": hours_total,
+        "hours_left": round(max(0.0, hours_total - float(scheduled_hours or 0)), 1),
+    }
     return ok({
-        "greeting_name": "林小舟" if uid == "u-zhou" else "陈早茶",
+        "greeting_name": "见舟",
         "date": today(),
         "demo_mode": config.DEMO_MODE,
-        "cycle": {
-            "name": "2026 Q3 · 稳定更新期", "week": "第 3 周 / 共 8 周",
-            "goal": "稳住周更 4 条，验证「汇报表达」方向",
-            "weekly_target": 4, "weekly_done": 2,
-            "hours_total": 14, "hours_left": 6.5,
-        },
+        "cycle": cycle,
         "ip_version": active_profile["version_no"] if active_profile else "—",
         "active_packages": packages,
         "inventory": inventory,
         "todo_extract": query_one("SELECT COUNT(*) c FROM signals WHERE user_id=? AND status='new'", (uid,))["c"],
-        "todo_analysis": 2, "todo_publish": counts.get("READY_TO_PUBLISH", 0),
+        "todo_analysis": todo_analysis,
+        "todo_publish": counts.get("READY_TO_PUBLISH", 0),
         "todo_retro": counts.get("WAITING_RETRO", 0),
         "cost_today": round(used_today, 2),
         "cost_budget": 20,
@@ -54,58 +82,86 @@ def workbench_status():
 def workbench_actions():
     uid = current_user_id()
     actions = []
-    # 1. 数据源异常
-    err_acc = query_one("SELECT * FROM accounts WHERE user_id=? AND status='error'", (uid,))
+    err_acc = query_one("SELECT * FROM accounts WHERE user_id=? AND status='error' ORDER BY rowid DESC", (uid,))
     if err_acc:
         actions.append({"priority": "high", "tag": "账号异常", "cls": "b-err",
-                        "title": f"{err_acc['platform']}账号同步连续失败 3 次",
-                        "meta": "TIKHUB_UNAUTHORIZED · 自动重试已停止，等待你处理",
+                        "title": f"{err_acc['platform']} 账号同步失败",
+                        "meta": err_acc.get("note") or "打开账号详情查看失败原因与 Trace ID",
                         "button": "查看账号", "page": "account"})
-    # 2. 最热的未处理对标信号（真实数据）
     hot = query_one(
         "SELECT * FROM signals WHERE user_id=? AND category='hot' AND status='new'"
         " ORDER BY relevance DESC LIMIT 1", (uid,))
     if hot:
         actions.append({"priority": "high", "tag": "对标高表现", "cls": "b-pri",
                         "title": f"{hot['author']}《{hot['title']}》",
-                        "meta": f"{hot['rel_perf'] or '高于账号均值'} · 相关度 {hot['relevance']}%",
+                        "meta": f"{hot['rel_perf'] or '尚未建立表现基线'} · 相关度 {hot['relevance']}%",
                         "button": "去提取", "page": "extraction", "primary": True,
                         "signal_id": hot["id"]})
-    actions += [
-        {"priority": "mid", "tag": "待你决策", "cls": "b-warn",
-         "title": "《30 岁前必须懂的 3 个职场真相》已提取完成，等待拆解",
-         "meta": "原生字幕 + 清洗文案已就绪 · 拆解将调用深度分析模型（约 ¥0.35）",
-         "button": "去拆解", "page": "analysis"},
-        {"priority": "mid", "tag": "继续创作", "cls": "b-info",
-         "title": "稿件《向上管理不是讨好》停在风格检查",
-         "meta": "草稿 v3 · 2 处长句与来源内容重复待处理",
-         "button": "继续创作", "page": "creation"},
-        {"priority": "low", "tag": "到达复盘", "cls": "b-ok",
-         "title": "《我劝你别急着做副业》已到 T+7 复盘时间",
-         "meta": "发布前判断已锁定 · 快照数据已回收 3 期",
-         "button": "开始复盘", "page": "retro"},
-    ]
+    pending = query_one(
+        "SELECT s.id,s.title,s.platform,s.created_at FROM source_contents s WHERE s.user_id=? "
+        "AND s.status='transcribed' AND NOT EXISTS (SELECT 1 FROM analyses a WHERE a.user_id=? "
+        "AND a.source_content_id=s.id) ORDER BY s.created_at DESC LIMIT 1", (uid, uid))
+    if pending:
+        actions.append({"priority": "mid", "tag": "待你决策", "cls": "b-warn",
+                        "title": f"《{pending['title']}》已完成提取，等待拆解",
+                        "meta": f"来源 {pending['platform']} · 提取资产已落库",
+                        "button": "去拆解", "page": "analysis"})
+    project = query_one(
+        "SELECT id,title,status,created_at FROM creation_projects WHERE user_id=? "
+        "AND status NOT IN ('completed','published','archived') ORDER BY created_at DESC LIMIT 1", (uid,))
+    if project:
+        actions.append({"priority": "mid", "tag": "继续创作", "cls": "b-info",
+                        "title": f"《{project['title']}》仍在创作中",
+                        "meta": f"真实项目状态：{project['status']}",
+                        "button": "继续创作", "page": "creation"})
+    due = query_one(
+        "SELECT p.final_title,p.platform,s.tn,s.due_at FROM snapshot_schedules s "
+        "JOIN publications p ON p.id=s.publication_id WHERE p.user_id=? "
+        "AND s.status IN ('PENDING','AWAITING_INPUT') AND datetime(s.due_at)<=datetime('now','localtime') "
+        "ORDER BY s.due_at LIMIT 1", (uid,))
+    if due:
+        actions.append({"priority": "low", "tag": "到达复盘", "cls": "b-ok",
+                        "title": f"《{due['final_title']}》已到 {due['tn']} 数据回收时间",
+                        "meta": f"{due['platform']} · 到期 {due['due_at']}",
+                        "button": "开始复盘", "page": "retro"})
+    if not actions:
+        has_account = query_one("SELECT id FROM accounts WHERE user_id=? LIMIT 1", (uid,))
+        actions.append({"priority": "mid", "tag": "开始连接", "cls": "b-info",
+                        "title": "尚无需要处理的真实行动",
+                        "meta": "先连接自有账号，再从内容雷达添加对标账号并同步作品。",
+                        "button": "连接账号" if not has_account else "打开内容雷达",
+                        "page": "account" if not has_account else "radar"})
     return ok(actions[:5])
 
 
 @router.get("/workbench/signals")
 def workbench_signals():
-    signals = [
-        {"tag": "自有账号", "cls": "b-err",
-         "html": "抖音近 3 条平均播放低于 30 天均值 <b>42%</b>",
-         "note": "依据：account_snapshots · T+3 数据"},
-        {"tag": "对标", "cls": "b-pri",
-         "html": "「崔璀」新作品 2 小时破 10 万播放", "note": "来源：TikHub · 12 分钟前"},
-        {"tag": "关键词", "cls": "b-info",
-         "html": "「向上管理」搜索热度 7 日上升 <b>38%</b>",
-         "note": "低成本关键词监控 · 每日 1 次"},
-        {"tag": "用户反馈", "cls": "b-warn",
-         "html": "「如何选择 offer」在近 5 条作品评论中重复出现 <b>11 次</b>",
-         "note": "来自已确认抓取的评论资产"},
-        {"tag": "方向变化", "cls": "b-neu",
-         "html": "「工具清单」类内容连续 2 条低于均值", "note": "已关联规则：观察中"},
-    ]
-    return ok(signals)
+    uid = current_user_id()
+    output = []
+    accounts = query("SELECT id,platform,handle FROM accounts WHERE user_id=? AND status='active' ORDER BY rowid DESC", (uid,))
+    for account in accounts[:2]:
+        snapshots = query("SELECT date,followers,posts FROM account_snapshots WHERE account_id=? ORDER BY date DESC LIMIT 2",
+                          (account["id"],))
+        if len(snapshots) >= 2:
+            delta = int(snapshots[0]["followers"] or 0) - int(snapshots[1]["followers"] or 0)
+            direction = "增加" if delta >= 0 else "减少"
+            output.append({"tag": "自有账号", "cls": "b-ok" if delta >= 0 else "b-warn",
+                           "html": f"{html.escape(account['platform'])} · {html.escape(account['handle'])} 粉丝较上次快照{direction} <b>{abs(delta)}</b>",
+                           "note": f"依据 account_snapshots · {snapshots[0]['date']}"})
+        elif snapshots:
+            output.append({"tag": "自有账号", "cls": "b-info",
+                           "html": f"{html.escape(account['platform'])} · {html.escape(account['handle'])} 已建立首个真实快照",
+                           "note": f"粉丝 {int(snapshots[0]['followers'] or 0)} · 作品 {int(snapshots[0]['posts'] or 0)}；至少两次同步后显示趋势"})
+    category_labels = {"hot": ("对标", "b-pri"), "keyword": ("关键词", "b-info"),
+                       "feedback": ("用户反馈", "b-warn")}
+    for category, (label, css) in category_labels.items():
+        signal = query_one("SELECT * FROM signals WHERE user_id=? AND category=? ORDER BY fetched_at DESC,relevance DESC LIMIT 1",
+                           (uid, category))
+        if signal:
+            output.append({"tag": label, "cls": css,
+                           "html": f"{html.escape(signal['author'] or signal['platform'])}《{html.escape(signal['title'])}》",
+                           "note": f"来源 {signal['source'] or '已入库信号'} · 相关度 {int(signal['relevance'] or 0)}% · {signal['fetched_at'] or '时间未知'}"})
+    return ok(output[:5])
 
 
 @router.get("/workbench/tasks")
@@ -131,7 +187,6 @@ class CommandIn(BaseModel):
 def parse_command(body: CommandIn):
     llm = get_llm_provider()
     result = llm.parse_command(body.text)
-    # 指令中的占位信号替换为当前真实最热信号
     uid = current_user_id()
     hot = query_one(
         "SELECT id FROM signals WHERE user_id=? AND category='hot' AND status='new'"

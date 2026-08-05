@@ -78,9 +78,14 @@
       if (view === 'add') {
         this.openAdd();
         const platform = params.get('platform');
+        const link = params.get('link');
         const count = Number(params.get('scan_count'));
         if (this.platformOptions.some((item) => item.id === platform)) this.form.platform = platform;
+        if (link) this.form.link = link;
         if (Number.isInteger(count) && count >= 1 && count <= 500) this.form.scan_count = count;
+        ['radar', 'platform', 'link', 'scan_count'].forEach((key) => params.delete(key));
+        const query = params.toString();
+        history.replaceState({}, '', location.pathname + (query ? '?' + query : '') + location.hash);
       }
       const benchmarkId = params.get('benchmark');
       if (benchmarkId) await this.openBenchmark(benchmarkId);
@@ -105,6 +110,7 @@
         this.addError = null;
         this.form = { platform: 'douyin', link: '', scan_count: 30, note: '' };
         this.addOpen = true;
+        this.$nextTick(() => document.getElementById('benchmarkLinkInput')?.focus());
       },
       async addBenchmark() {
         if (!this.form.link.trim()) {

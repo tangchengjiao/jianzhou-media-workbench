@@ -78,7 +78,8 @@
         if (!s.content_id) { toast('拆解需先完成提取。已为你预建拆解草稿', 'warn'); return; }
         try {
           const plan = await api.post('/api/analysis/plans', { source_content_id: s.content_id, title: s.title, source_chain: ['雷达 #' + s.id] });
-          if (confirm(`拆解计划：${plan.model} · 预计 ¥${plan.cost_est}（演示）\n确认后创建拆解任务`)) {
+          const costText = store.runtime.demo_mode ? `演示估算 ¥${plan.cost_est}` : '费用以 Provider 实际账单为准';
+          if (confirm(`拆解计划：${plan.model} · ${costText}\n确认后创建拆解任务`)) {
             const r = await api.post('/api/analysis/jobs', { source_content_id: s.content_id, title: s.title, source_chain: ['雷达 #' + s.id] });
             toast(r.note); go('analysis');
           }
@@ -135,8 +136,8 @@
 
   /* ================= 内容提取 ================= */
   window.PageExtraction = {
-    data() { return { jobs: [], assets: null, priority: [], library: [], uploadFile: null,
-      uploadTitle: '', uploading: false, loadError: null }; },
+    data() { return { jobs: [], assets: null, priority: [], library: [], signals: [], uploadFile: null,
+      uploadTitle: '', uploading: false, loadError: null, pickerOpen: false, selectedSignalId: '' }; },
     async mounted() {
       await this.load();
       this._t = setInterval(this.loadJobs, 1500);
@@ -150,6 +151,7 @@
         try {
           this.priority = await api.get('/api/extraction/priority');
           this.library = await api.get('/api/extraction/assets');
+          this.signals = await api.get('/api/radar/signals');
           if (this.library.length) this.assets = await api.get('/api/extraction/assets/' + this.library[0].source_content_id);
         } catch (e) { handleError(e); }
       },
@@ -164,9 +166,15 @@
       },
       badge(j) { const b = JOB_BADGE[j.status] || ['b-neu', j.status]; return { cls: b[0], label: j.status === 'RUNNING' ? `执行中 ${j.progress}%` : b[1] }; },
       stepLabel(j) { return STEP_LABELS[j.current_step] || j.current_step || '—'; },
-      async openPlan() {
+      openPlan() {
+        this.selectedSignalId = (this.signals.find((item) => item.status === 'new') || this.signals[0] || {}).id || '';
+        this.pickerOpen = true;
+      },
+      async createSignalPlan() {
+        if (!this.selectedSignalId) { toast('请先选择一条雷达信号', 'warn'); return; }
         try {
-          const plan = await api.post('/api/extraction/plans', { signal_id: 'SG-2031' });
+          const plan = await api.post('/api/extraction/plans', { signal_id: this.selectedSignalId });
+          this.pickerOpen = false;
           bus.emit('open-plan', plan);
         } catch (e) { handleError(e); }
       },
@@ -274,12 +282,16 @@
           </div>
         </div>
       </div>
+
+      <div class="modal extraction-source-modal" :class="{open:pickerOpen}" role="dialog" aria-modal="true" aria-labelledby="extractionSourceTitle" @click.self="pickerOpen=false">
+        <div class="modal-card"><div class="modal-head"><div class="modal-title" id="extractionSourceTitle">选择提取来源</div><button class="modal-x" aria-label="关闭" @click="pickerOpen=false">×</button></div><div class="modal-body"><div class="callout c-info"><span>来源</span><span>只会为你选中的真实雷达信号创建计划，不再使用固定示例 ID。</span></div><label class="field"><span>雷达信号</span><select class="input" id="extractionSignalSelect" v-model="selectedSignalId"><option value="" disabled>请选择</option><option v-for="signal in signals" :key="signal.id" :value="signal.id">{{ signal.platform }} · {{ signal.author }} · {{ signal.title }}</option></select></label><div class="empty" v-if="!signals.length">内容雷达暂无可提取信号，请先添加对标账号或创建信号。</div></div><div class="modal-foot"><button class="btn" @click="pickerOpen=false">取消</button><button class="btn btn-pri" :disabled="!selectedSignalId" @click="createSignalPlan">生成执行计划</button></div></div>
+      </div>
     </section>`,
   };
 
   /* ================= 内容拆解 ================= */
   window.PageAnalysis = {
-    data() { return { analyses: [], pending: [], patterns: [], active: null }; },
+    data() { return { analyses: [], pending: [], patterns: [], comparison: [], active: null, compareOpen: false, compareBucket: 'high', compareNote: '', compareSaving: false, patternOpen: false, patternName: '', patternNote: '', patternSaving: false }; },
     async mounted() { await this.load(); this._t = setInterval(this.load, 2500); },
     unmounted() { clearInterval(this._t); },
     methods: {
@@ -294,31 +306,57 @@
             if (cur) this.active = cur;
           }
           this.patterns = await api.get('/api/analysis/patterns');
+          this.comparison = await api.get('/api/analysis/comparison-items');
         } catch (e) { /* 轮询静默 */ }
       },
       async startAnalysis(sc) {
         try {
-          await api.post('/api/analysis/plans', { source_content_id: sc.id, title: sc.title });
+          const plan = await api.post('/api/analysis/plans', { source_content_id: sc.id, title: sc.title });
+          const costText = store.runtime.demo_mode ? `演示估算 ¥${plan.cost_est}` : '费用以 Provider 实际账单为准';
+          if (!confirm(`拆解计划：${plan.model} · ${costText}\n确认后创建任务`)) return;
           const r = await api.post('/api/analysis/jobs', { source_content_id: sc.id, title: sc.title, source_chain: ['提取 #' + sc.id] });
-          toast('拆解计划已确认：深度模型 · 预计 ¥0.35（演示）· 任务 ' + r.job_id);
+          toast(r.note + ' · 任务 ' + r.job_id);
         } catch (e) { handleError(e); }
       },
+      openPattern() {
+        if (!this.active) return;
+        this.patternName = this.active.result.topic || this.active.source_title || '';
+        this.patternNote = '来源：拆解 #' + this.active.id;
+        this.patternOpen = true;
+      },
       async savePattern() {
+        if (!this.patternName.trim()) return toast('请填写模式卡名称', 'warn');
+        this.patternSaving = true;
         try {
-          const r = await api.post('/api/analysis/patterns', { name: '归因翻转-汇报场景', note: '来源：拆解 #' + (this.active && this.active.id) });
-          toast(r.note); await this.load();
+          const r = await api.post('/api/analysis/patterns', { name: this.patternName.trim(), note: this.patternNote.trim() });
+          this.patternOpen = false; toast(r.note); await this.load();
         } catch (e) { handleError(e); }
+        this.patternSaving = false;
       },
       async toCreation() {
         try {
+          const chain = [];
+          if (this.active.signal_id) chain.push('雷达 #' + this.active.signal_id);
+          chain.push('提取 #' + this.active.source_content_id, '拆解 #' + this.active.id);
           const r = await api.post('/api/creation/projects', {
-            title: '汇报被打断？先改顺序',
-            source_chain: ['拆解 #' + this.active.id, '选题 #T-96'],
+            title: this.active.result.topic || this.active.source_title,
+            source_chain: chain,
           });
           toast('已携带拆解 #' + this.active.id + ' 创建创作项目');
           go('creation');
         } catch (e) { handleError(e); }
       },
+      openCompare() { if (!this.active) return; this.compareBucket = 'high'; this.compareNote = ''; this.compareOpen = true; },
+      async addCompare() {
+        if (!this.active) return;
+        this.compareSaving = true;
+        try {
+          const result = await api.post('/api/analysis/comparison-items', { analysis_id: this.active.id, performance_bucket: this.compareBucket, note: this.compareNote.trim() });
+          this.compareOpen = false; await this.load(); toast(result.note);
+        } catch (e) { handleError(e); }
+        this.compareSaving = false;
+      },
+      bucketLabel(bucket) { return { high: '高表现', medium: '中表现', low: '低表现' }[bucket] || bucket; },
       patternBadge(p) {
         return p.status === 'verified' ? ['b-ok', '本人已验证'] : p.status === 'draft' ? ['b-neu', '草稿'] : ['b-warn', '待验证'];
       },
@@ -336,7 +374,7 @@
             <span class="mini-note">拆解 #{{ active.id }} · {{ active.model }} · ¥{{ active.cost.toFixed(2) }}</span></div>
           <div class="card-body" style="padding-top:6px">
             <div class="src-chain" style="margin-bottom:12px">来源链：
-              <span class="node" @click="go('radar')">雷达 #SG-2031</span><em>→</em>
+              <template v-if="active.signal_id"><span class="node" @click="go('radar')">雷达 #{{ active.signal_id }}</span><em>→</em></template>
               <span class="node" @click="go('extraction')">提取 #{{ active.source_content_id }}</span><em>→</em>
               <span class="node">拆解 #{{ active.id }}</span>
             </div>
@@ -354,8 +392,8 @@
             <div class="ana-row"><div class="ana-label" style="color:var(--err)">不应照搬部分</div>{{ (active.result.non_reusable||[]).join(' · ') }}</div>
             <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
               <button class="btn btn-pri" @click="toCreation">转为我的选题</button>
-              <button class="btn" @click="savePattern">保存为模式卡</button>
-              <button class="btn btn-ghost" @click="toast('组合拆解为 P1 能力：可加入对比组（高/中/低表现样本）')">加入对比组</button>
+              <button class="btn" @click="openPattern">保存为模式卡</button>
+              <button class="btn btn-ghost" id="addComparisonBtn" @click="openCompare">加入对比组</button>
             </div>
           </div>
         </div>
@@ -383,8 +421,15 @@
               </div>
             </div>
           </div>
-          <div class="callout c-info" style="margin-bottom:0"><span>ⓘ</span><span><b>组合拆解（P1）：</b>同时选择高/中/低表现样本，比较开头、结构、时长与评论差异。</span></div>
+          <div class="card section-gap"><div class="card-head"><div class="card-title">组合拆解 <span class="badge b-neu">{{ comparison.length }} 个样本</span></div></div><div class="card-body" style="padding-top:4px"><div class="empty" v-if="!comparison.length">从左侧拆解结果加入高/中/低表现样本</div><div class="kv-row" v-for="item in comparison" :key="item.analysis_id"><span><span class="badge" :class="item.performance_bucket==='high'?'b-ok':item.performance_bucket==='low'?'b-warn':'b-neu'">{{ bucketLabel(item.performance_bucket) }}</span> {{ item.title }}</span><button class="btn btn-sm" @click="active=analyses.find(a=>a.id===item.analysis_id)||active">查看</button></div></div></div>
         </div>
+      </div>
+
+      <div class="modal analysis-compare-modal" :class="{open:compareOpen}" role="dialog" aria-modal="true" aria-labelledby="analysisCompareTitle" @click.self="compareOpen=false">
+        <div class="modal-card"><div class="modal-head"><div class="modal-title" id="analysisCompareTitle">加入组合拆解</div><button class="modal-x" aria-label="关闭" @click="compareOpen=false">×</button></div><div class="modal-body"><p v-if="active">《{{ active.source_title }}》</p><label class="field"><span>实际表现分组</span><select class="input" v-model="compareBucket"><option value="high">高表现</option><option value="medium">中表现</option><option value="low">低表现</option></select><small>这里记录事实分组，不由模型猜测。</small></label><label class="field"><span>依据或备注（可选）</span><input class="input" v-model="compareNote" placeholder="例如：发布 7 天播放高于账号中位数 2.4 倍"></label></div><div class="modal-foot"><button class="btn" @click="compareOpen=false">取消</button><button class="btn btn-pri" :disabled="compareSaving" @click="addCompare">{{ compareSaving ? '保存中…' : '加入对比组' }}</button></div></div>
+      </div>
+      <div class="modal analysis-pattern-modal" :class="{open:patternOpen}" role="dialog" aria-modal="true" aria-labelledby="analysisPatternTitle" @click.self="patternOpen=false">
+        <div class="modal-card"><div class="modal-head"><div class="modal-title" id="analysisPatternTitle">保存模式卡草稿</div><button class="modal-x" aria-label="关闭" @click="patternOpen=false">×</button></div><div class="modal-body"><label class="field"><span>模式名称</span><input class="input" v-model="patternName" maxlength="120"></label><label class="field"><span>证据说明</span><textarea class="input" rows="3" v-model="patternNote" maxlength="300"></textarea></label><div class="callout c-info"><span>证据</span><span>模式卡先以草稿保存；只有积累真实样本后才可提升置信度。</span></div></div><div class="modal-foot"><button class="btn" @click="patternOpen=false">取消</button><button class="btn btn-pri" :disabled="patternSaving || !patternName.trim()" @click="savePattern">{{ patternSaving ? '保存中…' : '保存草稿' }}</button></div></div>
       </div>
     </section>`,
   };

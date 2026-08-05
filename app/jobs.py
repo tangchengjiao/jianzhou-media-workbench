@@ -387,13 +387,10 @@ async def _run_analysis(jid: str, user_id: str, input_data: dict) -> None:
 
 async def _run_sync(jid: str, user_id: str, input_data: dict) -> None:
     from .datasource import get_datasource
-    from .errors import tikhub_unauthorized
     account = query_one("SELECT * FROM accounts WHERE id=?",
                         (input_data.get("account_id"),))
     if not account:
         raise RuntimeError(f"账号不存在：{input_data.get('account_id')}")
-    if account["status"] == "error":
-        raise tikhub_unauthorized(account["platform"])
     ok = await _run_steps(jid, ["resolve_account", "fetch_posts",
                                 "fetch_metrics", "persist_snapshot"], 0.4)
     if not ok:
@@ -401,14 +398,34 @@ async def _run_sync(jid: str, user_id: str, input_data: dict) -> None:
     ds = get_datasource()
     extra = account.get("extra_json")
     import json as _json
-    uid = ( _json.loads(extra).get("uid") if extra else None) or account["id"]
-    ov = ds.account_overview(uid, "douyin")
-    execute("UPDATE accounts SET followers=?, last_sync_at=? WHERE id=?",
-            (ov["fans"], now(), account["id"]))
+    meta = _json.loads(extra) if extra else {}
+    uid = meta.get("uid") or account["id"]
+    try:
+        ov = ds.account_overview(uid, account["platform"])
+    except Exception as exc:
+        code = getattr(exc, "code", "ACCOUNT_SYNC_FAILED")
+        trace_id = getattr(exc, "trace_id", "")
+        meta.update({"error_code": code, "trace_id": trace_id})
+        execute("UPDATE accounts SET status='error',note=?,extra_json=? WHERE id=?",
+                (getattr(exc, "message", str(exc)), jdumps(meta), account["id"]))
+        raise
+    meta.update({"name": ov.get("name") or meta.get("name", ""),
+                 "avatar": ov.get("avatar") or meta.get("avatar", ""),
+                 "bio": ov.get("bio") or meta.get("bio", ""),
+                 "likes": int(ov.get("likes") or 0),
+                 "video_count": int(ov.get("video_count") or 0)})
+    execute("UPDATE accounts SET handle=?,followers=?,last_sync_at=?,status='ok',"
+            "note=?,bound_provider=?,extra_json=? WHERE id=?",
+            ("@" + (meta.get("name") or account["handle"]).lstrip("@"),
+             int(ov.get("fans") or 0), now(), "最近一次同步成功", ds.name,
+             jdumps(meta), account["id"]))
+    execute("DELETE FROM account_snapshots WHERE account_id=? AND date=?",
+            (account["id"], datetime.date.today().isoformat()))
     execute("INSERT INTO account_snapshots VALUES(?,?,?,?,?,?)",
             (f"ss-{new_trace_id()[-6:]}", account["id"],
-             datetime.date.today().isoformat(), ov["fans"], 0,
-             jdumps({"source": ds.name})))
+             datetime.date.today().isoformat(), int(ov.get("fans") or 0),
+             int(ov.get("video_count") or 0),
+             jdumps({"source": ds.name, "likes": int(ov.get("likes") or 0)})))
     _set(jid, status="SUCCEEDED", progress=100, finished_at=now(),
          output_json=jdumps({"followers": ov["fans"], "source": ds.name}))
 
