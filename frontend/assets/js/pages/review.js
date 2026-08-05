@@ -4,7 +4,8 @@
 
   /* ================= 数据复盘 ================= */
   window.PageRetro = {
-    data() { return { overview: null, due: [], report: null, suggestions: [], experiments: [], activePub: null }; },
+    data() { return { overview: null, due: [], report: null, suggestions: [], experiments: [], activePub: null,
+      snapshot: { tn: 'T+1', plays: 0, likes: 0, comments: 0, collects: 0 }, savingSnapshot: false }; },
     async mounted() { await this.load(); bus.on('rules-changed', this.loadRules); },
     methods: {
       go,
@@ -24,6 +25,23 @@
         try { this.report = await api.get('/api/retro/report/' + pubId); this.activePub = pubId; }
         catch (e) { handleError(e); }
       },
+      async saveSnapshot() {
+        if (!this.activePub) return toast('请先选择一条发布记录', 'warn');
+        this.savingSnapshot = true;
+        try {
+          const r = await api.post('/api/retro/publications/' + this.activePub + '/snapshots', this.snapshot);
+          toast(r.note); await this.openReport(this.activePub); await this.load();
+        } catch (e) { handleError(e); }
+        this.savingSnapshot = false;
+      },
+      async generateRetro() {
+        if (!this.activePub) return;
+        try {
+          const r = await api.post('/api/retro/publications/' + this.activePub + '/generate');
+          toast(r.deduplicated ? '已加载现有复盘' : '真实快照复盘已生成');
+          await this.openReport(this.activePub); await this.loadRules();
+        } catch (e) { handleError(e); }
+      },
       reviewRule(s) { bus.emit('open-rule', s); },
       async rejectRule(s) { try { const r = await api.post('/api/rules/suggestions/' + s.id + '/reject'); toast(r.note, 'warn'); await this.loadRules(); } catch (e) { handleError(e); } },
       async observeRule(s) { try { const r = await api.post('/api/rules/suggestions/' + s.id + '/observe'); toast(r.note, 'warn'); await this.loadRules(); } catch (e) { handleError(e); } },
@@ -38,19 +56,36 @@
       </div>
 
       <div class="grid g4 section-gap" v-if="overview">
-        <div class="stat"><div class="stat-l">粉丝（30天）</div><div class="stat-v" style="color:var(--ok)">{{ overview.fans_30d }}</div></div>
-        <div class="stat"><div class="stat-l">发布频率</div><div class="stat-v">{{ overview.posts_per_week }} <small>条/周</small></div></div>
-        <div class="stat"><div class="stat-l">计划 vs 实际</div><div class="stat-v">{{ overview.plan_vs_actual }}</div></div>
+        <div class="stat"><div class="stat-l">真实发布</div><div class="stat-v">{{ overview.publications }}</div></div>
+        <div class="stat"><div class="stat-l">已存快照</div><div class="stat-v">{{ overview.snapshots }}</div></div>
+        <div class="stat"><div class="stat-l">待采集快照</div><div class="stat-v">{{ overview.snapshots_pending }}</div></div>
         <div class="stat"><div class="stat-l">判断校准率</div><div class="stat-v">{{ overview.calibration }}</div></div>
       </div>
 
+      <div class="card section-gap" v-if="due.length">
+        <div class="card-head"><div class="card-title">发布与快照证据链</div><span class="card-sub">无授权采集 Provider 时等待你录入真实指标</span></div>
+        <div class="card-body">
+          <div class="task-row" v-for="item in due" :key="item.publication_id">
+            <div class="tr-body"><div class="tr-title">{{ item.final_title }}</div><div class="tr-meta">{{ item.publication_platform }} · {{ item.schedules.map(s=>s.tn+':'+s.status).join(' · ') }}</div></div>
+            <button class="btn btn-sm" @click="openReport(item.publication_id)">选择</button>
+          </div>
+          <div class="grid g4" v-if="activePub" style="margin-top:12px">
+            <label class="field"><span>快照节点</span><select class="input" v-model="snapshot.tn"><option>T+1</option><option>T+3</option><option>T+7</option></select></label>
+            <label class="field"><span>播放</span><input class="input" type="number" min="0" v-model.number="snapshot.plays"></label>
+            <label class="field"><span>点赞</span><input class="input" type="number" min="0" v-model.number="snapshot.likes"></label>
+            <label class="field"><span>评论</span><input class="input" type="number" min="0" v-model.number="snapshot.comments"></label>
+            <label class="field"><span>收藏</span><input class="input" type="number" min="0" v-model.number="snapshot.collects"></label>
+          </div>
+          <div class="settings-actions" v-if="activePub"><button class="btn btn-pri" :disabled="savingSnapshot" @click="saveSnapshot">保存真实快照</button><button class="btn" @click="generateRetro">生成复盘与规则建议</button></div>
+        </div>
+      </div>
+
       <div class="grid g21 section-gap">
-        <div class="card" v-if="report && report.report">
-          <div class="card-head"><div class="card-title">单条复盘 · 《{{ report.publication.final_title }}》 <span class="badge b-ok">T+7 完成</span></div>
-            <div class="src-chain"><span class="node" v-for="n in report.report.source_chain" :key="n">{{ n }}</span></div></div>
+        <div class="card" v-if="report && report.report && report.report.actual && report.report.prediction">
+          <div class="card-head"><div class="card-title">单条复盘 · 《{{ report.publication.final_title }}》 <span class="badge b-ok">基于真实快照</span></div></div>
           <div class="card-body">
             <div style="display:flex;gap:24px;flex-wrap:wrap;margin-bottom:12px">
-              <div><div class="ana-label">为什么做</div><div style="font-size:12px">{{ report.report.why }}</div></div>
+              <div><div class="ana-label">发布前假设</div><div style="font-size:12px">{{ report.report.prediction.hypothesis }}</div></div>
               <div><div class="ana-label">播放走势（快照）</div>
                 <div class="bars" style="height:64px;width:220px">
                   <div class="bar" v-for="sn in report.snapshots" :key="sn.id">
@@ -59,17 +94,11 @@
                 </div>
               </div>
             </div>
-            <table class="tbl">
-              <tr><th>指标</th><th>发布前判断（已锁定 🔒）</th><th>实际 T+7</th><th>结论</th></tr>
-              <tr v-for="row in report.report.rows" :key="row.metric">
-                <td>{{ row.metric }}</td><td>{{ row.expected }}</td><td><b>{{ row.actual }}</b></td>
-                <td><span class="badge" :class="row.verdict_class">{{ row.verdict }}</span></td>
-              </tr>
-            </table>
-            <div class="mini-note" style="margin-top:8px">原预测数值不可修改、不可删除；以上为追加的复盘层。下一步建议：{{ report.report.next }}</div>
+            <table class="tbl"><tr><th>预测档位（锁定）</th><th>最新节点</th><th>播放</th><th>互动率</th></tr><tr><td>{{ report.report.prediction.expected_bucket }}</td><td>{{ report.report.actual.latest_tn }}</td><td>{{ report.report.actual.plays }}</td><td>{{ report.report.actual.engagement_rate }}%</td></tr></table>
+            <div class="mini-note" style="margin-top:8px">{{ report.report.calibration }}。原预测不可修改，复盘是追加证据层。</div>
           </div>
         </div>
-        <div class="card" v-else><div class="loading">加载中</div></div>
+        <div class="card" v-else><div class="empty">{{ report && report.report ? '这是一条旧版演示复盘，需重新录入真实快照后生成新版证据链' : '选择发布记录并录入至少一个真实快照后生成复盘' }}</div></div>
 
         <div class="card">
           <div class="card-head"><div class="card-title">规则建议 <span class="badge b-warn">{{ suggestions.filter(s=>s.status==='pending').length }} 条待审核</span>

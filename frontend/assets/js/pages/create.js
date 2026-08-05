@@ -7,7 +7,7 @@
     data() {
       return {
         projects: [], activeId: null, p: null,
-        directions: [], selDir: -1, draft: '', generating: false,
+        directions: [], selDir: -1, draft: '', generating: false, generatingMulti: false,
         predForm: { goal: '', expected_bucket: '', confidence: 0.6, strengths: '', risks: '', hypothesis: '', user_judgement: '' },
       };
     },
@@ -49,10 +49,21 @@
         try {
           const r = await api.post('/api/creation/projects/' + this.activeId + '/draft');
           this.draft = r.content;
-          toast('初稿已生成（演示模型）· 已自动执行风格与原创性检查');
+          toast('初稿已生成 · 已记录模型运行与上下文引用');
           await this.openProject(this.activeId);
         } catch (e) { handleError(e); }
         this.generating = false;
+      },
+      async genMultiDrafts() {
+        this.generatingMulti = true;
+        try {
+          const r = await api.post('/api/creation/projects/' + this.activeId + '/drafts/generate', {
+            platforms: ['抖音口播', '小红书图文', 'B站视频简介', '视频号口播'],
+          });
+          toast('已生成 ' + r.drafts.length + ' 个平台版本');
+          await this.openProject(this.activeId);
+        } catch (e) { handleError(e); }
+        this.generatingMulti = false;
       },
       async saveDraft() {
         try {
@@ -120,7 +131,7 @@
       </div></div>
 
       <template v-if="p">
-        <div class="ctx-bar">◈ <b>Context Resolver</b> 本次任务显式加载：{{ p.context.packages && p.context.packages.join(' · ') }} · {{ p.context.sources && p.context.sources.join(' · ') }} · 约 {{ p.context.tokens }} tokens · {{ p.context.isolation }}</div>
+        <div class="ctx-bar"><b>Context Resolver</b> 本次任务显式加载 {{ (p.context.refs||[]).length }} 个引用 · 约 {{ p.context.tokens }} tokens · {{ p.context.isolation }} · Run {{ p.context.context_run_id }}</div>
 
         <div class="card section-gap">
           <div class="card-head"><div class="card-title">差异化方向 <span class="card-sub">至少三类明显不同的迁移，拒绝同义词替换</span></div></div>
@@ -149,9 +160,10 @@
               <textarea class="draft-area" v-model="draft"></textarea>
               <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
                 <button class="btn btn-pri" :disabled="generating" @click="genDraft">{{ generating ? '生成中…' : (p.drafts.length ? '重新生成初稿' : '生成初稿') }}</button>
+                <button class="btn" :disabled="generatingMulti" @click="genMultiDrafts">{{ generatingMulti ? '生成多平台版本中…' : '生成抖音 / 小红书 / B站 / 视频号版本' }}</button>
                 <button class="btn" @click="saveDraft">保存为新版本</button>
               </div>
-              <div class="mini-note" style="margin-top:6px">引用与事实来源：案例来自咨询记录 #C-31（已获授权 · 已匿名化） · 结构参考拆解 #A-1024（已标注借鉴边界）</div>
+              <div class="mini-note" style="margin-top:6px">引用与事实来源以 Context Run {{ p.context.context_run_id }} 为准；没有记录的案例与数据不得写入。</div>
             </div>
           </div>
 
@@ -171,7 +183,7 @@
               <div class="card-head"><div class="card-title">修改记录</div></div>
               <div class="card-body" style="padding-top:4px">
                 <div class="kv-row" v-for="d in [...p.drafts].reverse()" :key="d.id">
-                  <span class="mono">v{{ d.version_no }}</span><span>{{ d.note }}</span>
+                  <span class="mono">v{{ d.version_no }} · {{ d.platform }}</span><span>{{ d.note }}</span>
                 </div>
                 <div class="empty" v-if="!p.drafts.length">尚无稿件版本</div>
               </div>

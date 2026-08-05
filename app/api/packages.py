@@ -7,9 +7,10 @@ from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel
 
 from ..db import execute, jdumps, jloads, query, query_one
-from ..errors import not_found, validation_failed
+from ..errors import state_invalid, validation_failed
 from ..config import MAX_IMPORT_UPLOAD_BYTES
 from ..ids import new_id
+from ..repositories import evidence, owned_row
 from . import current_user_id, now, ok
 
 router = APIRouter(tags=["packages"])
@@ -26,17 +27,13 @@ def list_packages():
 
 @router.get("/packages/{pid}")
 def package_detail(pid: str):
-    row = query_one("SELECT * FROM data_packages WHERE id=?", (pid,))
-    if not row:
-        raise not_found("数据包", pid)
+    row = owned_row("data_packages", pid, current_user_id(), label="数据包")
     return ok(row)
 
 
 @router.get("/packages/{pid}/impact")
 def package_impact(pid: str):
-    row = query_one("SELECT * FROM data_packages WHERE id=?", (pid,))
-    if not row:
-        raise not_found("数据包", pid)
+    row = owned_row("data_packages", pid, current_user_id(), label="数据包")
     return ok({
         "package": row["name"],
         "sources": row["source_count"],
@@ -49,9 +46,7 @@ def package_impact(pid: str):
 
 @router.post("/packages/{pid}/activate")
 def activate_package(pid: str):
-    row = query_one("SELECT * FROM data_packages WHERE id=?", (pid,))
-    if not row:
-        raise not_found("数据包", pid)
+    row = owned_row("data_packages", pid, current_user_id(), label="数据包")
     execute("UPDATE data_packages SET status='active', activated_at=? WHERE id=?",
             (now(), pid))
     return ok({"note": f"数据包 {row['name']} 已激活"})
@@ -96,7 +91,7 @@ async def import_upload(file: UploadFile = File(...),
         )
     bid = new_id("IMP")
     filename = file.filename or "unnamed"
-    errors, mapping, rows_total, rows_ok = [], [], 0, 0
+    errors, mapping, rows_total, rows_ok, parsed_rows = [], [], 0, 0, []
 
     if filename.lower().endswith(".csv"):
         text = raw.decode("utf-8-sig", errors="replace")
@@ -115,14 +110,21 @@ async def import_upload(file: UploadFile = File(...),
                                "action": "已跳过（未写入）"})
                 continue
             rows_ok += 1
+            parsed_rows.append({guess.get(k, k): v for k, v in row.items()})
     else:
         mapping = [{"from": "(文件内容)", "to": "raw_text", "policy": "仅保存"}]
         rows_total, rows_ok = 1, 1
+        parsed_rows.append({"filename": filename, "raw_text": raw.decode("utf-8", errors="replace")})
 
     status = "parsed" if not errors else "partial"
     execute("INSERT INTO import_batches VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (bid, uid, filename, target_package, status,
              rows_total, rows_ok, len(errors), jdumps(errors), jdumps(mapping), now()))
+    for row_no, payload in enumerate(parsed_rows, start=1):
+        execute("INSERT INTO import_rows VALUES(?,?,?,?,?,?,?)",
+                (new_id("IR"), bid, row_no, jdumps(payload), "READY", None, None))
+    evidence(uid, "import_batch", bid, "parsed", payload={"filename": filename,
+             "total": rows_total, "ready": rows_ok, "failed": len(errors)})
     return ok({
         "batch_id": bid, "status": status, "total": rows_total,
         "success": rows_ok, "failed": len(errors), "errors": errors,
@@ -133,13 +135,40 @@ async def import_upload(file: UploadFile = File(...),
 
 @router.post("/imports/{bid}/commit")
 def import_commit(bid: str):
-    b = query_one("SELECT * FROM import_batches WHERE id=?", (bid,))
-    if not b:
-        raise not_found("导入批次", bid)
+    uid = current_user_id()
+    b = owned_row("import_batches", bid, uid, label="导入批次")
     if b["status"] not in ("parsed", "partial"):
         return ok({"note": f"批次已是 {b['status']} 状态"})
+    rows = query("SELECT * FROM import_rows WHERE batch_id=? AND status='READY' ORDER BY row_no",
+                 (bid,))
+    if not rows:
+        raise state_invalid("批次没有可写入的数据行")
+    package = query_one("SELECT * FROM data_packages WHERE owner_id=? AND name=?",
+                        (uid, b["target_package"]))
+    if not package:
+        package_id = new_id("PKG")
+        execute("INSERT INTO data_packages VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (package_id, uid, "corpus", b["target_package"], "v1", "active", 0,
+                 "由外部导入创建", "private", now(), now(), now()))
+    else:
+        package_id = package["id"]
+    committed = []
+    for row in rows:
+        payload = jloads(row["payload_json"], {})
+        target_id = new_id("CI")
+        name = str(payload.get("title") or payload.get("filename") or f"导入第 {row['row_no']} 行")
+        execute("INSERT INTO corpus_items VALUES(?,?,?,?,?,?,?,?,?)",
+                (target_id, uid, name, "import", 1, jdumps({"package_id": package_id}),
+                 "", f"import:{bid}", 0))
+        execute("UPDATE import_rows SET status='COMMITTED',target_id=? WHERE id=?",
+                (target_id, row["id"]))
+        committed.append(target_id)
+    execute("UPDATE data_packages SET source_count=source_count+?,updated_at=? WHERE id=?",
+            (len(committed), now(), package_id))
     new_status = "committed" if b["failed"] == 0 else "partial_committed"
     execute("UPDATE import_batches SET status=? WHERE id=?", (new_status, bid))
+    evidence(uid, "import_batch", bid, "committed", refs=[package_id, *committed],
+             payload={"count": len(committed)})
     note = (f"已写入 {b['success']} 条到「{b['target_package']}」"
             + (f"，{b['failed']} 条失败已跳过并记录在报告（部分成功不会显示为绿色完成）"
                if b["failed"] else ""))
@@ -148,8 +177,16 @@ def import_commit(bid: str):
 
 @router.post("/imports/{bid}/rollback")
 def import_rollback(bid: str):
-    b = query_one("SELECT * FROM import_batches WHERE id=?", (bid,))
-    if not b:
-        raise not_found("导入批次", bid)
+    uid = current_user_id()
+    b = owned_row("import_batches", bid, uid, label="导入批次")
+    rows = query("SELECT id,target_id FROM import_rows WHERE batch_id=? AND status='COMMITTED'",
+                 (bid,))
+    target_ids = [row["target_id"] for row in rows if row["target_id"]]
+    for target_id in target_ids:
+        execute("DELETE FROM corpus_items WHERE id=? AND user_id=? AND source=?",
+                (target_id, uid, f"import:{bid}"))
+    execute("UPDATE import_rows SET status='ROLLED_BACK' WHERE batch_id=?", (bid,))
     execute("UPDATE import_batches SET status='rolled_back' WHERE id=?", (bid,))
+    evidence(uid, "import_batch", bid, "rolled_back", refs=target_ids,
+             payload={"removed": len(target_ids)})
     return ok({"note": f"批次 {bid} 已整体回滚（二次确认后执行，记录已保留）"})

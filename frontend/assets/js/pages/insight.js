@@ -135,7 +135,8 @@
 
   /* ================= 内容提取 ================= */
   window.PageExtraction = {
-    data() { return { jobs: [], assets: null, priority: [] }; },
+    data() { return { jobs: [], assets: null, priority: [], library: [], uploadFile: null,
+      uploadTitle: '', uploading: false, loadError: null }; },
     async mounted() {
       await this.load();
       this._t = setInterval(this.loadJobs, 1500);
@@ -148,10 +149,19 @@
         await this.loadJobs();
         try {
           this.priority = await api.get('/api/extraction/priority');
-          this.assets = await api.get('/api/extraction/assets/SC-121');
+          this.library = await api.get('/api/extraction/assets');
+          if (this.library.length) this.assets = await api.get('/api/extraction/assets/' + this.library[0].source_content_id);
         } catch (e) { handleError(e); }
       },
-      async loadJobs() { try { this.jobs = await api.get('/api/extraction/jobs'); } catch (e) {} },
+      async loadJobs() {
+        try {
+          this.jobs = await api.get('/api/extraction/jobs'); this.loadError = null;
+          const done = this.jobs.find(j => j.task_type === 'extraction' && j.status === 'SUCCEEDED' && j.output_json.source_content_id);
+          if (done && (!this.assets || this.assets.id !== done.output_json.source_content_id)) {
+            this.assets = await api.get('/api/extraction/assets/' + done.output_json.source_content_id);
+          }
+        } catch (e) { this.loadError = e; }
+      },
       badge(j) { const b = JOB_BADGE[j.status] || ['b-neu', j.status]; return { cls: b[0], label: j.status === 'RUNNING' ? `执行中 ${j.progress}%` : b[1] }; },
       stepLabel(j) { return STEP_LABELS[j.current_step] || j.current_step || '—'; },
       async openPlan() {
@@ -159,6 +169,25 @@
           const plan = await api.post('/api/extraction/plans', { signal_id: 'SG-2031' });
           bus.emit('open-plan', plan);
         } catch (e) { handleError(e); }
+      },
+      chooseUpload(event) { this.uploadFile = event.target.files && event.target.files[0]; },
+      async uploadAndPlan() {
+        if (!this.uploadFile) return toast('请先选择一个 10 MB 以内的音频文件', 'warn');
+        this.uploading = true;
+        try {
+          const form = new FormData(); form.append('file', this.uploadFile);
+          form.append('title', this.uploadTitle.trim() || this.uploadFile.name);
+          form.append('platform', 'local');
+          const uploaded = await api.upload('/api/extraction/assets/upload', form);
+          const plan = await api.post('/api/extraction/plans', {
+            asset_id: uploaded.asset_id, title: this.uploadTitle.trim() || this.uploadFile.name,
+            platform: 'local',
+          });
+          bus.emit('open-plan', plan);
+          await this.load();
+          toast(uploaded.deduplicated ? '检测到相同素材，已复用原始资产' : '音频已安全保存，等待确认转写计划');
+        } catch (e) { handleError(e); }
+        this.uploading = false;
       },
       async cancel(j) { try { const r = await api.post('/api/extraction/jobs/' + j.id + '/cancel'); toast(r.note, 'warn'); await this.loadJobs(); } catch (e) { handleError(e); } },
       async retry(j) { try { const r = await api.post('/api/extraction/jobs/' + j.id + '/retry'); toast(r.note); await this.loadJobs(); } catch (e) { handleError(e); } },
@@ -186,10 +215,20 @@
       </div>
       <div class="callout c-pri"><span>⚡</span><span>未点击前，系统<b>不会</b>自动下载媒体或转写。执行前展示完整计划与成本；已缓存内容不会重复付费处理。</span></div>
 
+      <div class="card section-gap upload-audio-card">
+        <div class="card-head"><div class="card-title">上传真实音频 <span class="card-sub">WAV / MP3 / M4A / MP4 · 最大 10 MB</span></div></div>
+        <div class="card-body"><div class="upload-audio-grid">
+          <label class="field"><span>内容标题</span><input class="input" v-model="uploadTitle" placeholder="用于后续拆解与创作"></label>
+          <label class="field"><span>选择音频或含音频的视频</span><input class="input" type="file" accept="audio/*,video/mp4" @change="chooseUpload"></label>
+          <button class="btn btn-pri" style="align-self:end" :disabled="uploading" @click="uploadAndPlan">{{ uploading ? '上传中…' : '上传并生成转写计划' }}</button>
+        </div><div class="mini-note">上传后按 SHA-256 去重；原始文件与原始转写不可覆盖。执行 ASR 前仍需在计划弹层明确授权。</div></div>
+      </div>
+
       <div class="grid g31 section-gap">
         <div class="card">
           <div class="card-head"><div class="card-title">提取任务 <span class="card-sub">状态机驱动 · 不存在自动变成功</span></div></div>
           <div class="card-body">
+            <div class="inline-error" role="alert" v-if="loadError"><b>{{ loadError.code }}</b><span>{{ loadError.message }}</span><button class="btn btn-sm" @click="loadJobs">重试</button></div>
             <div class="empty" v-if="!jobs.length">暂无提取任务</div>
             <div class="task-row" v-for="j in jobs" :key="j.id" :class="{failed: j.status==='FAILED'}">
               <div class="tr-body">
@@ -199,6 +238,7 @@
                   阶段：{{ stepLabel(j) }}
                   <template v-if="j.status==='FAILED' && j.error"> · {{ j.error.code }} · 部分产物已保留，<b>未</b>标记为完整转写</template>
                   <template v-if="j.status==='SUCCEEDED'"> · 费用 ¥{{ j.cost_actual.toFixed(2) }}</template>
+                  <template v-if="j.attempt_count"> · 第 {{ j.attempt_count }}/{{ j.max_attempts }} 次尝试</template>
                   <template v-if="j.status==='WAITING_CONFIRMATION'"> · 平台无原生字幕，等待你明确授权 ASR</template>
                 </div>
               </div>
@@ -300,11 +340,11 @@
               <span class="node" @click="go('extraction')">提取 #{{ active.source_content_id }}</span><em>→</em>
               <span class="node">拆解 #{{ active.id }}</span>
             </div>
-            <div class="ana-row"><div class="ana-label">核心选题</div>{{ active.result.topic }} <span class="cite">00:41</span></div>
+            <div class="ana-row"><div class="ana-label">核心选题</div>{{ active.result.topic }}</div>
             <div class="ana-row"><div class="ana-label">目标受众 / 用户问题</div>{{ (active.result.target_audience||[]).join('、') }} · “{{ active.result.user_problem }}”</div>
             <div class="ana-row" v-if="active.result.hook"><div class="ana-label">开头钩子（{{ active.result.hook.cite }}）</div>“{{ active.result.hook.text }}” —— {{ active.result.hook.mechanism }}</div>
             <div class="ana-row"><div class="ana-label">内容结构</div>
-              <div class="struct"><div class="seg" v-for="seg in active.result.structure" :key="seg.name" :style="{flex:seg.weight, background:seg.color}"><b>{{ seg.name }}</b><span>{{ seg.span }}</span></div></div></div>
+              <div class="struct" v-if="active.result.structure&&active.result.structure.length"><div class="seg" v-for="seg in active.result.structure" :key="seg.name" :style="{flex:seg.weight, background:seg.color}"><b>{{ seg.name }}</b><span>{{ seg.span }}</span></div></div><span class="mini-note" v-else>模型未返回可验证的结构段，不补造。</span></div>
             <div class="ana-row" v-if="active.result.key_turns&&active.result.key_turns.length"><div class="ana-label">关键转折</div>“{{ active.result.key_turns[0].text }}” <span class="cite">{{ active.result.key_turns[0].cite }}</span></div>
             <div class="ana-row"><div class="ana-label">论据与案例</div>{{ (active.result.evidence||[]).join('；') }}</div>
             <div class="ana-row"><div class="ana-label">情绪机制</div>{{ (active.result.emotional_mechanisms||[]).join('、') }}</div>
@@ -330,7 +370,7 @@
                 <span>《{{ sc.title }}》</span>
                 <button class="btn btn-sm btn-pri" @click="startAnalysis(sc)">拆解</button>
               </div>
-              <div class="mini-note" style="margin-top:6px">拆解将调用深度分析模型（演示 ¥0.35），确认后才执行。</div>
+              <div class="mini-note" style="margin-top:6px">拆解将调用当前绑定的深度分析模型；确认后才执行，实际用量进入台账。</div>
             </div>
           </div>
           <div class="card section-gap">

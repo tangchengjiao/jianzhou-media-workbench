@@ -3,11 +3,11 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from ..db import execute, jdumps, jloads, query, query_one
-from ..errors import not_found
 from ..jobs import create_job
 from ..ids import new_id
 from .. import config
 from ..providers import get_setting
+from ..repositories import owned_row
 from . import current_user_id, now, ok
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -33,9 +33,7 @@ def list_analysis():
 
 @router.get("/detail/{aid}")
 def analysis_detail(aid: str):
-    row = query_one("SELECT * FROM analyses WHERE id=?", (aid,))
-    if not row:
-        raise not_found("拆解", aid)
+    row = owned_row("analyses", aid, current_user_id(), label="拆解")
     row["result"] = jloads(row["result_json"], {})
     return ok(row)
 
@@ -48,23 +46,33 @@ class AnalysisJobIn(BaseModel):
 
 @router.post("/plans")
 def analysis_plan(body: AnalysisJobIn):
+    source = owned_row("source_contents", body.source_content_id, current_user_id(),
+                       label="来源内容")
     model = "demo_analysis_model" if config.DEMO_MODE else get_setting("llm", "analysis_model")
     return ok({
         "task_type": "analysis",
-        "cost_est": 0.35,
+        "cost_est": 0.35 if config.DEMO_MODE else 0.0,
         "model": model,
         "steps": ["加载转写资产", "Context Resolver 显式加载上下文",
                   "深度模型拆解", "Schema 校验", "写库"],
         "requires_confirmation": True,
+        "source": {"id": source["id"], "title": source["title"],
+                   "status": source["status"]},
     })
 
 
 @router.post("/jobs")
 def analysis_job(body: AnalysisJobIn):
     uid = current_user_id()
-    job = create_job(uid, "analysis", body.model_dump(), cost_est=0.35)
-    suffix = "（演示）" if config.DEMO_MODE else ""
-    return ok({"job_id": job["id"], "note": f"拆解任务已排队 · 约 ¥0.35{suffix}"})
+    source = owned_row("source_contents", body.source_content_id, uid, label="来源内容")
+    payload = body.model_dump()
+    payload["title"] = source["title"]
+    cost_est = 0.35 if config.DEMO_MODE else 0.0
+    job = create_job(uid, "analysis", payload, cost_est=cost_est,
+                     idempotency_key=f"analysis:{source['id']}")
+    note = ("拆解任务已排队 · 演示成本 ¥0.35" if config.DEMO_MODE
+            else "拆解任务已排队 · Token 用量将写入台账，金额以 Provider 账单为准")
+    return ok({"job_id": job["id"], "note": note})
 
 
 @router.get("/patterns")

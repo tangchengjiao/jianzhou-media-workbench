@@ -20,6 +20,7 @@ SECRET_FILE = DATA_DIR / "secrets.json"
 _ENV_KEYS = {
     "tikhub_api_key": "JIANZHOU_TIKHUB_API_KEY",
     "llm_api_key": "JIANZHOU_LLM_API_KEY",
+    "asr_api_key": "JIANZHOU_ASR_API_KEY",
 }
 
 

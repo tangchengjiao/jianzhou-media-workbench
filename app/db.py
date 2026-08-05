@@ -210,6 +210,91 @@ CREATE INDEX IF NOT EXISTS idx_benchmarks_user_platform_scan
 ON benchmark_accounts(user_id, platform, scan_count);
 """
 
+PHASE_TWO_FOUNDATION_MIGRATION = """
+ALTER TABLE jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE jobs ADD COLUMN idempotency_key TEXT;
+ALTER TABLE jobs ADD COLUMN lease_until TEXT;
+ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_user_task_idempotency
+ON jobs(user_id, task_type, idempotency_key)
+WHERE idempotency_key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS job_steps(
+  id TEXT PRIMARY KEY, job_id TEXT NOT NULL, step TEXT NOT NULL,
+  status TEXT NOT NULL, attempt INTEGER NOT NULL, started_at TEXT,
+  finished_at TEXT, error_json TEXT,
+  UNIQUE(job_id, step, attempt),
+  FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_job_steps_job_attempt
+ON job_steps(job_id, attempt, started_at);
+CREATE TABLE IF NOT EXISTS media_assets(
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, source_content_id TEXT,
+  kind TEXT NOT NULL, path TEXT NOT NULL, mime_type TEXT, size_bytes INTEGER,
+  sha256 TEXT NOT NULL, immutable INTEGER NOT NULL DEFAULT 1,
+  metadata_json TEXT, created_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(source_content_id) REFERENCES source_contents(id) ON DELETE SET NULL);
+CREATE INDEX IF NOT EXISTS idx_media_assets_user_source
+ON media_assets(user_id, source_content_id, created_at);
+CREATE TABLE IF NOT EXISTS context_runs(
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, task_type TEXT NOT NULL,
+  refs_json TEXT NOT NULL, content_json TEXT NOT NULL,
+  token_estimate INTEGER NOT NULL, checksum TEXT NOT NULL, created_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_context_runs_user_created
+ON context_runs(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS snapshot_schedules(
+  id TEXT PRIMARY KEY, publication_id TEXT NOT NULL, tn TEXT NOT NULL,
+  due_at TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT, captured_at TEXT,
+  UNIQUE(publication_id, tn),
+  FOREIGN KEY(publication_id) REFERENCES publications(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_snapshot_schedules_due
+ON snapshot_schedules(status, due_at);
+CREATE TABLE IF NOT EXISTS import_rows(
+  id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, row_no INTEGER NOT NULL,
+  payload_json TEXT NOT NULL, status TEXT NOT NULL, target_id TEXT, error TEXT,
+  UNIQUE(batch_id, row_no),
+  FOREIGN KEY(batch_id) REFERENCES import_batches(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS rule_package_versions(
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, version_no INTEGER NOT NULL,
+  diff_json TEXT NOT NULL, rule_ids_json TEXT NOT NULL, created_at TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(user_id, version_no),
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS evidence_events(
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL, event_type TEXT NOT NULL, refs_json TEXT NOT NULL,
+  payload_json TEXT NOT NULL, created_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_evidence_entity
+ON evidence_events(user_id, entity_type, entity_id, created_at);
+"""
+
+LEGACY_PUBLICATION_SCHEDULE_MIGRATION = """
+INSERT OR IGNORE INTO snapshot_schedules
+(id,publication_id,tn,due_at,status,attempts,last_error,captured_at)
+SELECT 'SS-MIG-' || id || '-T1',id,'T+1',datetime(published_at,'+1 day'),
+CASE WHEN EXISTS(SELECT 1 FROM publication_snapshots s WHERE s.publication_id=publications.id AND s.tn='T+1')
+THEN 'CAPTURED' ELSE 'PENDING' END,0,NULL,
+(SELECT MAX(taken_at) FROM publication_snapshots s WHERE s.publication_id=publications.id AND s.tn='T+1')
+FROM publications;
+INSERT OR IGNORE INTO snapshot_schedules
+(id,publication_id,tn,due_at,status,attempts,last_error,captured_at)
+SELECT 'SS-MIG-' || id || '-T3',id,'T+3',datetime(published_at,'+3 day'),
+CASE WHEN EXISTS(SELECT 1 FROM publication_snapshots s WHERE s.publication_id=publications.id AND s.tn='T+3')
+THEN 'CAPTURED' ELSE 'PENDING' END,0,NULL,
+(SELECT MAX(taken_at) FROM publication_snapshots s WHERE s.publication_id=publications.id AND s.tn='T+3')
+FROM publications;
+INSERT OR IGNORE INTO snapshot_schedules
+(id,publication_id,tn,due_at,status,attempts,last_error,captured_at)
+SELECT 'SS-MIG-' || id || '-T7',id,'T+7',datetime(published_at,'+7 day'),
+CASE WHEN EXISTS(SELECT 1 FROM publication_snapshots s WHERE s.publication_id=publications.id AND s.tn='T+7')
+THEN 'CAPTURED' ELSE 'PENDING' END,0,NULL,
+(SELECT MAX(taken_at) FROM publication_snapshots s WHERE s.publication_id=publications.id AND s.tn='T+7')
+FROM publications;
+"""
+
 MIGRATIONS = [
     (1, "critical_indexes", INDEX_MIGRATION),
     (2, "constrained_schema_marker",
@@ -217,6 +302,8 @@ MIGRATIONS = [
      "ON schema_migrations(applied_at);"),
     (3, "benchmark_sync_state", BENCHMARK_SYNC_STATE_MIGRATION),
     (4, "benchmark_custom_scan_count", BENCHMARK_SCAN_COUNT_MIGRATION),
+    (5, "phase_two_reliability_and_evidence", PHASE_TWO_FOUNDATION_MIGRATION),
+    (6, "legacy_publication_snapshot_schedules", LEGACY_PUBLICATION_SCHEDULE_MIGRATION),
 ]
 
 
@@ -257,6 +344,7 @@ def _protect_legacy_secrets(conn: sqlite3.Connection) -> None:
     for section, field, secret_name in (
         ("source", "tikhub_api_key", "tikhub_api_key"),
         ("llm", "api_key", "llm_api_key"),
+        ("voice", "api_key", "asr_api_key"),
     ):
         row = conn.execute("SELECT value_json FROM app_settings WHERE key=?", (section,)).fetchone()
         values = jloads(row["value_json"], {}) if row else {}

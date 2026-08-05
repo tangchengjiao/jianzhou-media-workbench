@@ -5,6 +5,7 @@
 - 真实适配器在未配置 Key 时立即抛 CONFIG_MISSING_API_KEY，绝不返回假数据；
 - 配置了 Key 的真实调用走 httpx；任何失败原样抛 Typed Error，不切换适配器。
 """
+import base64
 import datetime
 import ipaddress
 import json
@@ -23,6 +24,8 @@ def get_setting(section: str, key: str, default=""):
         return get_secret("tikhub_api_key") or default
     if (section, key) == ("llm", "api_key"):
         return get_secret("llm_api_key") or default
+    if (section, key) == ("voice", "api_key"):
+        return get_secret("asr_api_key") or default
     row = query_one("SELECT value_json FROM app_settings WHERE key=?", (section,))
     if not row:
         return default
@@ -181,7 +184,8 @@ class DemoLLMProvider:
         return cands
 
     # ---- 内容拆解 ----
-    def analyze(self, source_title: str) -> dict:
+    def analyze(self, source_title: str, transcript: str = "",
+                context: dict | None = None) -> dict:
         return {
             "topic": f"《{source_title}》核心议题：表层是技巧，底层是结构顺序问题（演示拆解）",
             "target_audience": ["需频繁向上汇报的职场中层"],
@@ -208,7 +212,7 @@ class DemoLLMProvider:
         }
 
     # ---- 创作 ----
-    def diff_directions(self, title: str) -> list[dict]:
+    def diff_directions(self, title: str, context: dict | None = None) -> list[dict]:
         return [
             {"type": "同问题 · 不同观点", "title": "“汇报被打断是好事”",
              "note": "反转立场：说明领导在听，怕的是领导不问。风险：立场与你的代表观点冲突。",
@@ -221,11 +225,13 @@ class DemoLLMProvider:
              "cls": "b-vio"},
         ]
 
-    def generate_outline(self, title: str, direction: str) -> list[str]:
+    def generate_outline(self, title: str, direction: str,
+                         context: dict | None = None) -> list[str]:
         return ["① 钩子：被打断是顺序问题", "② 我的咨询翻车案例",
                 "③ 正确顺序：结论-风险-诉求", "④ 对照改写演示", "⑤ 清单 + 模板 CTA"]
 
-    def generate_draft(self, title: str, direction: str) -> str:
+    def generate_draft(self, title: str, direction: str,
+                       context: dict | None = None, platform: str = "抖音口播") -> str:
         return (f"{title}——先说结论：大多数表达问题不是内容问题，是顺序问题。\n\n"
                 f"我上个月接一个咨询，对方准备了 12 页材料，从背景开始讲。讲到第 3 页，"
                 f"领导说：所以你到底要说什么？\n\n说白了，听汇报的人脑子里只有三件事："
@@ -244,6 +250,9 @@ class RealLLMProvider:
         self.base_url = get_setting("llm", "api_base").rstrip("/")
         self.auth_mode = get_setting("llm", "auth_mode", "bearer")
         self.allow_private_network = bool(get_setting("llm", "allow_private_network", False))
+        self.last_usage: dict = {}
+        self.last_model = ""
+        self.last_request_id = ""
 
     def _require(self):
         if not self.base_url:
@@ -304,6 +313,9 @@ class RealLLMProvider:
             raise AppError("LLM_OUTPUT_INVALID", "大模型返回了非 JSON 内容",
                            stage="llm_parse", provider=self.name)
         try:
+            self.last_usage = data.get("usage") or {}
+            self.last_model = str(data.get("model") or model)
+            self.last_request_id = resp.headers.get("x-request-id", "")
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError):
             raise AppError("LLM_OUTPUT_INVALID", "大模型返回结构不符合 OpenAI 协议",
@@ -350,9 +362,22 @@ class RealLLMProvider:
     def _json(self, model_key: str, system: str, user: str):
         model = get_setting("llm", model_key)
         text = self.chat(model, system + " 只输出合法 JSON，不要使用 Markdown 代码块。", user)
+        stripped = text.strip()
+        if stripped.startswith("```") and stripped.endswith("```"):
+            lines = stripped.splitlines()
+            stripped = "\n".join(lines[1:-1]).strip()
         try:
-            return json.loads(text)
+            return json.loads(stripped)
         except json.JSONDecodeError:
+            decoder = json.JSONDecoder()
+            for index, char in enumerate(stripped):
+                if char not in "[{":
+                    continue
+                try:
+                    value, _end = decoder.raw_decode(stripped[index:])
+                    return value
+                except json.JSONDecodeError:
+                    continue
             raise AppError("LLM_OUTPUT_INVALID", "大模型输出不是合法 JSON，结果未写入。",
                            stage="schema_validate", provider=self.name, retryable=True)
 
@@ -386,44 +411,100 @@ class RealLLMProvider:
                            stage="schema_validate", provider=self.name)
         return result
 
-    def analyze(self, source_title: str) -> dict:
+    def analyze(self, source_title: str, transcript: str = "",
+                context: dict | None = None) -> dict:
         result = self._json(
-            "analysis_model", "拆解内容结构、受众问题、证据、可复用与不可复用部分。",
-            f"待拆解内容标题：{source_title}",
+            "analysis_model",
+            "拆解内容结构并输出对象。字段必须包含：topic 字符串；target_audience 字符串数组；"
+            "user_problem 字符串；hook 对象(text,cite,mechanism)；structure 数组，每项含"
+            "name,span,weight,color；key_turns 数组；evidence 字符串数组；"
+            "emotional_mechanisms 字符串数组；golden_quotes 数组；cta 字符串；"
+            "comment_triggers、reusable、non_reusable 均为字符串数组。没有证据的字段用空值，"
+            "不得虚构时间戳、数据、案例或引语。",
+            json.dumps({"title": source_title, "transcript": transcript,
+                        "context": context or {}}, ensure_ascii=False),
         )
         if not isinstance(result, dict):
             raise AppError("LLM_OUTPUT_INVALID", "内容拆解结果必须是对象。",
                            stage="schema_validate", provider=self.name)
-        result.setdefault("model", get_setting("llm", "analysis_model"))
-        return result
+        def list_value(*keys):
+            for key in keys:
+                value = result.get(key)
+                if isinstance(value, list):
+                    return value
+            return []
 
-    def diff_directions(self, title: str) -> list[dict]:
+        raw_structure = list_value("structure", "content_structure")
+        palette = ["#E4572E", "#F08A4B", "#D97706", "#2E6FDB", "#6E56CF", "#57564F"]
+        structure = []
+        for index, item in enumerate(raw_structure):
+            if isinstance(item, str):
+                item = {"name": item}
+            if not isinstance(item, dict):
+                continue
+            try:
+                weight = max(1, int(float(item.get("weight") or 1)))
+            except (TypeError, ValueError):
+                weight = 1
+            structure.append({
+                "name": str(item.get("name") or item.get("section") or item.get("stage") or f"结构 {index + 1}"),
+                "span": str(item.get("span") or item.get("time") or "未标注"),
+                "weight": weight,
+                "color": str(item.get("color") or palette[index % len(palette)]),
+            })
+        normalized = {
+            "topic": str(result.get("topic") or source_title),
+            "target_audience": list_value("target_audience", "audience"),
+            "user_problem": str(result.get("user_problem") or ""),
+            "hook": result.get("hook") if isinstance(result.get("hook"), dict) else None,
+            "structure": structure,
+            "key_turns": list_value("key_turns"),
+            "evidence": list_value("evidence"),
+            "emotional_mechanisms": list_value("emotional_mechanisms"),
+            "golden_quotes": list_value("golden_quotes"),
+            "cta": str(result.get("cta") or ""),
+            "comment_triggers": list_value("comment_triggers", "audience_questions"),
+            "reusable": list_value("reusable", "reusable_parts"),
+            "non_reusable": list_value("non_reusable", "non_reusable_parts"),
+            "model": get_setting("llm", "analysis_model"),
+            "prompt_version": "analysis_v6_schema_normalized",
+            "provider_raw_keys": sorted(result.keys()),
+        }
+        return normalized
+
+    def diff_directions(self, title: str, context: dict | None = None) -> list[dict]:
         result = self._json(
             "writing_model",
             "为选题生成三个差异化方向。输出数组；每项含 type、title、note、cls。",
-            f"选题：{title}",
+            json.dumps({"title": title, "context": context or {}}, ensure_ascii=False),
         )
         if not isinstance(result, list) or len(result) < 3:
             raise AppError("LLM_OUTPUT_INVALID", "差异化方向不足三项。",
                            stage="schema_validate", provider=self.name)
         return result
 
-    def generate_outline(self, title: str, direction: str) -> list[str]:
+    def generate_outline(self, title: str, direction: str,
+                         context: dict | None = None) -> list[str]:
         result = self._json(
             "writing_model",
             "为短视频文案生成五步提纲。只输出 JSON 字符串数组。",
-            f"标题：{title}\n差异化方向：{direction}",
+            json.dumps({"title": title, "direction": direction,
+                        "context": context or {}}, ensure_ascii=False),
         )
         if not isinstance(result, list) or len(result) < 3 or not all(isinstance(x, str) for x in result):
             raise AppError("LLM_OUTPUT_INVALID", "内容提纲必须是至少三项的字符串数组。",
                            stage="schema_validate", provider=self.name)
         return result
 
-    def generate_draft(self, title: str, direction: str) -> str:
+    def generate_draft(self, title: str, direction: str,
+                       context: dict | None = None, platform: str = "抖音口播") -> str:
         return self.chat(
             get_setting("llm", "writing_model"),
             "你是中文短视频文案编辑。不得虚构用户经历、数据或来源。",
-            f"标题：{title}\n差异化方向：{direction}\n生成一版可继续编辑的初稿。",
+            json.dumps({"title": title, "direction": direction, "platform": platform,
+                        "context": context or {},
+                        "instruction": "生成一版可继续编辑的初稿，不得虚构事实。"},
+                       ensure_ascii=False),
         )
 
 
@@ -466,7 +547,8 @@ def get_llm_provider():
 class DemoSTTProvider:
     name = "demo_stt"
 
-    def transcribe(self, audio_bytes: bytes, context: str = "") -> dict:
+    def transcribe(self, audio_bytes: bytes, context: str = "",
+                   mime_type: str = "audio/wav") -> dict:
         return {"text": "（演示转写）我一般都先删形容词，把句子压到十五个字以内，"
                         "比如「本质上来说」直接改成「说白了」。",
                 "model": "demo_faster_whisper_small", "cost": 0.0,
@@ -474,14 +556,104 @@ class DemoSTTProvider:
 
 
 class RealSTTProvider:
-    name = "local_faster_whisper"
+    """Aliyun Model Studio Qwen ASR through its OpenAI-compatible API."""
+    name = "aliyun_bailian_asr"
 
-    def transcribe(self, audio_bytes: bytes, context: str = "") -> dict:
-        raise AppError("STT_PROVIDER_UNAVAILABLE",
-                       "本地 faster-whisper 未安装或未配置。请在系统设置 → 语音模型 中检查，"
-                       "或明确选择其他 STT 提供商。系统不会自动切换适配器。",
-                       stage="transcribe", retryable=True,
-                       provider="local_faster_whisper")
+    def __init__(self):
+        self.api_key = get_setting("voice", "api_key")
+        self.base_url = str(get_setting(
+            "voice", "api_base",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )).rstrip("/")
+        self.model = str(get_setting("voice", "asr_model", "qwen3-asr-flash"))
+        self.language = str(get_setting("voice", "language", "zh"))
+
+    def _require(self) -> None:
+        if get_setting("voice", "stt_provider", "aliyun_bailian") != "aliyun_bailian":
+            raise AppError(
+                "STT_PROVIDER_UNSUPPORTED", "当前真实模式只实现了阿里云百炼语音识别。",
+                stage="provider_config", provider=self.name,
+            )
+        if not self.api_key:
+            raise config_missing_api_key("阿里云百炼 ASR")
+        if not self.base_url or not self.model:
+            raise AppError("STT_CONFIG_INCOMPLETE", "请先填写 ASR API 地址和模型名称。",
+                           stage="provider_config", provider=self.name)
+        _validate_llm_url(self.base_url, allow_private=False)
+
+    def transcribe(self, audio_bytes: bytes, context: str = "",
+                   mime_type: str = "audio/wav") -> dict:
+        import httpx
+        self._require()
+        if not audio_bytes:
+            raise AppError("AUDIO_EMPTY", "上传的音频为空。", stage="transcribe",
+                           provider=self.name, http_status=422)
+        if len(audio_bytes) > config.MAX_AUDIO_UPLOAD_BYTES:
+            raise AppError("AUDIO_TOO_LARGE", "音频不能超过 10 MB。", stage="transcribe",
+                           provider=self.name, http_status=413,
+                           details={"limit_bytes": config.MAX_AUDIO_UPLOAD_BYTES})
+        audio_url = f"data:{mime_type};base64,{base64.b64encode(audio_bytes).decode('ascii')}"
+        # Qwen ASR's compatible endpoint accepts an audio-only user message.
+        # Keep `context` for adapter compatibility, but never send unsupported
+        # system/text content that would make a valid audio request fail.
+        messages = [{"role": "user", "content": [
+            {"type": "input_audio", "input_audio": {"data": audio_url}},
+        ]}]
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "asr_options": {"language": self.language, "enable_itn": True},
+        }
+        try:
+            _validate_llm_url(self.base_url, resolve_dns=True)
+            with httpx.Client(timeout=120.0, follow_redirects=False) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}",
+                             "Content-Type": "application/json"},
+                    json=payload,
+                )
+        except httpx.TimeoutException:
+            raise AppError("STT_PROVIDER_UNAVAILABLE", "语音识别请求超时。",
+                           stage="transcribe", retryable=True, provider=self.name)
+        except httpx.HTTPError as exc:
+            raise AppError("STT_PROVIDER_UNAVAILABLE",
+                           f"语音识别连接失败：{exc.__class__.__name__}",
+                           stage="transcribe", retryable=True, provider=self.name)
+        if response.status_code in (401, 403):
+            raise AppError("STT_UNAUTHORIZED", "阿里云百炼 API Key 无效或无模型权限。",
+                           stage="transcribe", provider=self.name,
+                           details={"http_status": response.status_code})
+        if response.status_code in (402, 429):
+            raise AppError("STT_RATE_LIMITED", "语音识别余额不足或请求过于频繁。",
+                           stage="transcribe", retryable=True, provider=self.name,
+                           details={"http_status": response.status_code})
+        if response.status_code != 200:
+            provider_message = ""
+            try:
+                error_body = response.json()
+                provider_message = str((error_body.get("error") or {}).get("message") or "")[:500]
+            except (ValueError, AttributeError):
+                provider_message = ""
+            raise AppError("STT_PROVIDER_ERROR",
+                           f"语音识别服务返回异常（HTTP {response.status_code}）。",
+                           stage="transcribe", retryable=response.status_code >= 500,
+                           provider=self.name,
+                           details={"http_status": response.status_code,
+                                    "provider_message": provider_message})
+        try:
+            data = response.json()
+            text = str(data["choices"][0]["message"]["content"]).strip()
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise AppError("STT_OUTPUT_INVALID", "语音识别返回结构不符合协议。",
+                           stage="transcribe", provider=self.name)
+        if not text:
+            raise AppError("STT_OUTPUT_EMPTY", "语音识别没有返回文本。",
+                           stage="transcribe", provider=self.name)
+        usage = data.get("usage") or {}
+        return {"text": text, "model": data.get("model") or self.model,
+                "cost": 0.0, "demo": False, "usage": usage,
+                "provider_request_id": response.headers.get("x-request-id", "")}
 
 
 def get_stt_provider():

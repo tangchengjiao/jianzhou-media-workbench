@@ -55,6 +55,24 @@ async def run_benchmark_patrol() -> dict:
             "results": results, "errors": errors}
 
 
+async def run_snapshot_due() -> dict:
+    """Never invent metrics: due rows wait for a real collector or manual input."""
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    rows = query(
+        "SELECT s.id,s.publication_id,s.tn,p.platform,p.url FROM snapshot_schedules s "
+        "JOIN publications p ON p.id=s.publication_id "
+        "WHERE s.status='PENDING' AND s.due_at<=? ORDER BY s.due_at", (now,),
+    )
+    for row in rows:
+        execute(
+            "UPDATE snapshot_schedules SET status='AWAITING_INPUT',attempts=attempts+1,"
+            "last_error=? WHERE id=?",
+            ("当前平台未配置获授权的数据采集 Provider；请人工录入真实公开指标", row["id"]),
+        )
+    return {"due": len(rows), "captured": 0, "awaiting_input": len(rows),
+            "note": "没有可验证的指标采集能力时，调度器不会生成演示快照。"}
+
+
 async def run_task(task_name: str) -> dict:
     """手动或定时触发同一入口；互斥防并发。"""
     if _lock.locked():
@@ -63,7 +81,7 @@ async def run_task(task_name: str) -> dict:
         if task_name == "benchmark_patrol":
             result = await run_benchmark_patrol()
         elif task_name == "snapshot":
-            result = await run_benchmark_patrol()  # 首版快照即公开数据刷新
+            result = await run_snapshot_due()
         else:
             return {"error": f"未知任务：{task_name}"}
         st = _schedule_state()

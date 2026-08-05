@@ -9,7 +9,7 @@ from . import config
 from .api import api_router
 from .db import init_db
 from .errors import register_error_handlers
-from .jobs import start_worker, stop_worker
+from .jobs import recover_interrupted_jobs, start_worker, stop_worker
 from .seed import seed_if_empty
 
 
@@ -21,6 +21,7 @@ async def lifespan(app: FastAPI):
     from .api.settings import migrate_legacy_secrets
     from .db import transaction
     migrate_legacy_secrets()
+    recover_interrupted_jobs()
     with transaction():
         seed_if_empty()
     start_worker()

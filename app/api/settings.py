@@ -4,7 +4,7 @@ import shutil
 import copy
 import urllib.parse
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel, Field
 
 from .. import config
@@ -19,6 +19,7 @@ PUBLIC_SECTIONS = set(config.DEFAULT_SETTINGS)
 SECRET_FIELDS = {
     ("source", "tikhub_api_key"): "tikhub_api_key",
     ("llm", "api_key"): "llm_api_key",
+    ("voice", "api_key"): "asr_api_key",
 }
 
 
@@ -62,6 +63,7 @@ def migrate_legacy_secrets() -> None:
     for section, field, secret_name in (
         ("source", "tikhub_api_key", "tikhub_api_key"),
         ("llm", "api_key", "llm_api_key"),
+        ("voice", "api_key", "asr_api_key"),
     ):
         row = query_one("SELECT value_json FROM app_settings WHERE key=?", (section,))
         values = jloads(row["value_json"], {}) if row else {}
@@ -78,6 +80,22 @@ def migrate_legacy_secrets() -> None:
         set_secret("tikhub_api_key", legacy)
     if row:
         execute("UPDATE app_settings SET value_json=? WHERE key='datasource'", (jdumps(values),))
+    # Add newly introduced non-secret fields without overwriting user choices.
+    for section, defaults in config.DEFAULT_SETTINGS.items():
+        row = query_one("SELECT value_json FROM app_settings WHERE key=?", (section,))
+        stored = jloads(row["value_json"], {}) if row else {}
+        if section == "voice" and int(stored.get("configVersion") or 0) < 2:
+            stored = {**stored, **{
+                key: value for key, value in defaults.items()
+                if key in {"configVersion", "stt_provider", "protocol", "auth_mode",
+                           "api_base", "asr_model"}
+            }}
+        normalized = _deep_merge(defaults, stored)
+        for (secret_section, field), _secret_name in SECRET_FIELDS.items():
+            if section == secret_section:
+                normalized.pop(field, None)
+        execute("INSERT OR REPLACE INTO app_settings(key,value_json) VALUES(?,?)",
+                (section, jdumps(normalized)))
 
 
 @router.get("/settings")
@@ -131,6 +149,8 @@ def put_settings(body: SettingsIn):
     merged = _deep_merge(old, incoming)
     if body.section == "llm":
         _validate_llm_values(merged)
+    if body.section == "voice":
+        _validate_voice_values(merged)
     for secret_name, secret_value in secret_updates:
         set_secret(secret_name, secret_value)
     execute("INSERT OR REPLACE INTO app_settings VALUES(?,?)",
@@ -169,6 +189,30 @@ def _validate_llm_values(values: dict) -> None:
         values[key] = model
 
 
+def _validate_voice_values(values: dict) -> None:
+    from ..providers import _validate_llm_url
+    if values.get("stt_provider") != "aliyun_bailian":
+        raise validation_failed("当前真实 ASR 只支持 aliyun_bailian")
+    if values.get("protocol") != "openai_compatible_audio":
+        raise validation_failed("ASR 协议必须是 openai_compatible_audio")
+    if values.get("auth_mode") != "bearer":
+        raise validation_failed("ASR 鉴权方式必须是 bearer")
+    base_url = str(values.get("api_base") or "").strip().rstrip("/")
+    if not base_url:
+        raise validation_failed("请填写 ASR API Base URL")
+    try:
+        _validate_llm_url(base_url)
+    except Exception as exc:
+        if getattr(exc, "code", None):
+            raise validation_failed(exc.message)
+        raise
+    values["api_base"] = base_url
+    model = str(values.get("asr_model") or "").strip()
+    if not model or len(model) > 200:
+        raise validation_failed("请填写有效的 ASR 模型名称")
+    values["asr_model"] = model
+
+
 @router.get("/settings/runtime")
 def runtime():
     return ok({
@@ -199,6 +243,10 @@ def diagnostics():
     llm_values = jloads(llm_row["value_json"], {}) if llm_row else {}
     llm_ready = bool(llm_values.get("api_base") and llm_values.get("fast_model")
                      and (llm_values.get("auth_mode") == "none" or has_secret("llm_api_key")))
+    voice_row = query_one("SELECT value_json FROM app_settings WHERE key='voice'")
+    voice_values = jloads(voice_row["value_json"], {}) if voice_row else {}
+    asr_ready = bool(voice_values.get("api_base") and voice_values.get("asr_model")
+                     and has_secret("asr_api_key"))
     foreign_keys = query_one("PRAGMA foreign_keys")["foreign_keys"] == 1
     fk_errors = query("PRAGMA foreign_key_check")
     integrity = query_one("PRAGMA quick_check")["quick_check"]
@@ -212,9 +260,11 @@ def diagnostics():
              "status": "ok" if (config.DEMO_MODE or llm_ready) else "err",
              "detail": "demo_llm · 演示数据" if config.DEMO_MODE
                        else ("配置完整 · 请手动测试连接" if llm_ready else "配置不完整")},
-            {"name": "本地 Whisper（演示）" if config.DEMO_MODE else "本地 Whisper",
-             "status": "ok" if config.DEMO_MODE else "err",
-             "detail": "demo_faster_whisper_small" if config.DEMO_MODE else "未安装或尚未验证"},
+            {"name": "ASR（演示模式）" if config.DEMO_MODE else "阿里云百炼 ASR",
+             "status": "ok" if (config.DEMO_MODE or asr_ready) else "err",
+             "detail": "demo_stt · 演示数据" if config.DEMO_MODE
+                       else (f"{voice_values.get('asr_model')} · 请手动测试音频"
+                             if asr_ready else "配置不完整")},
             {"name": "FFmpeg", "status": "ok" if ffmpeg else "warn",
              "detail": ffmpeg or "未在 PATH 中找到（媒体处理功能受限，不影响其他功能）"},
             {"name": "本地存储权限", "status": "ok" if writable else "err",
@@ -312,6 +362,22 @@ def llm_check(body: LLMCheckIn):
     from ..providers import RealLLMProvider
     result = RealLLMProvider().check_connection(body.model)
     return ok({**result, "note": f"模型 {result['model']} 连接与最小生成测试通过。"})
+
+
+@router.post("/stt/check")
+async def stt_check(file: UploadFile = File(...)):
+    """Explicit, potentially billable ASR probe with a user-supplied audio file."""
+    from ..providers import RealSTTProvider
+    payload = await file.read(config.MAX_AUDIO_UPLOAD_BYTES + 1)
+    if len(payload) > config.MAX_AUDIO_UPLOAD_BYTES:
+        raise validation_failed("测试音频不能超过 10 MB")
+    result = RealSTTProvider().transcribe(
+        payload, context="这是见舟新媒体工作台的语音识别连通测试。",
+        mime_type=file.content_type or "audio/wav",
+    )
+    return ok({"provider": RealSTTProvider.name, "model": result["model"],
+               "reachable": True, "text": result["text"],
+               "note": "ASR 连接与真实音频转写通过。"})
 
 
 @router.get("/scheduler")

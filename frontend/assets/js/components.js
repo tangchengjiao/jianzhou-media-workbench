@@ -25,10 +25,10 @@
       },
     },
     template: `
-    <div class="modal" :class="{open}" @click.self="close">
-      <div class="modal-card">
-        <div class="modal-head"><div class="modal-title">执行计划确认 <span class="badge b-warn">单次确认</span></div>
-          <button class="modal-x" @click="close">✕</button></div>
+    <div class="modal" :class="{open}" @click.self="close" @keydown.esc="close">
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="planModalTitle">
+        <div class="modal-head"><div class="modal-title" id="planModalTitle">执行计划确认 <span class="badge b-warn">单次确认</span></div>
+          <button class="modal-x" aria-label="关闭执行计划" @click="close">✕</button></div>
         <div class="modal-body" v-if="plan">
           <div class="callout c-info" style="margin-bottom:12px"><span>▶</span><span>
             来源：{{ plan.source.platform }}《{{ plan.source.title }}》
@@ -42,7 +42,7 @@
               <div class="field" style="margin-top:8px">
                 <label style="display:flex;gap:6px;align-items:center;cursor:pointer">
                   <input type="checkbox" v-model="asrAuth">
-                  无原生字幕时继续：下载媒体并 ASR（本次任务内明确授权 · 默认不勾选）
+                  {{ plan.source.asset_id ? '使用已上传音频执行百炼 ASR' : '无原生字幕时继续下载媒体并 ASR' }}（本次任务内明确授权 · 默认不勾选）
                 </label>
               </div>
             </div>

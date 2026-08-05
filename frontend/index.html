@@ -51,6 +51,7 @@
         <div class="tb-title">{{ pageTitle }}</div>
         <div class="tb-right">
           <span class="chip-state demo" v-if="runtime.demo_mode" title="当前为显式演示模式：外部数据来自内置演示 Provider，可在系统设置中关闭">◆ 演示数据</span>
+          <span class="chip-state" v-else title="当前为真实模式：外部任务使用已配置 Provider，失败不会回退演示结果">● 真实 Provider</span>
           <span class="chip-state warn" v-if="status.sync_alerts && status.sync_alerts.length"
                 :title="status.sync_alerts[0].note" @click="go('account')" style="cursor:pointer">● 同步异常 {{ status.sync_alerts.length }}</span>
           <span class="chip-state" v-if="usage">今日成本 <b class="mono">¥{{ usage.today.toFixed(2) }}</b> / ¥{{ usage.daily_budget }}</span>

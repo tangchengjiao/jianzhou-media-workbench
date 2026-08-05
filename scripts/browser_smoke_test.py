@@ -53,10 +53,16 @@ def main() -> int:
         radar_result = dump_dom(browser, f"{base}/#/radar", root / "radar")
         add_result = dump_dom(browser, f"{base}/?radar=add#/radar", root / "add")
         settings_result = dump_dom(browser, f"{base}/?settings=llm#/settings", root / "settings")
+        voice_result = dump_dom(browser, f"{base}/?settings=voice#/settings", root / "voice")
+        extraction_result = dump_dom(browser, f"{base}/#/extraction", root / "extraction")
+        retro_result = dump_dom(browser, f"{base}/#/retro", root / "retro")
     dom = result.stdout
     radar_dom = radar_result.stdout
     add_dom = add_result.stdout
     settings_dom = settings_result.stdout
+    voice_dom = voice_result.stdout
+    extraction_dom = extraction_result.stdout
+    retro_dom = retro_result.stdout
     checks = {
         "浏览器正常退出": result.returncode == 0,
         "Vue 已移除 v-cloak": "v-cloak" not in dom,
@@ -73,9 +79,20 @@ def main() -> int:
         "模型名称可按任务绑定": all(label in settings_dom for label in (
             "快速分类 / 指令路由", "深度分析模型", "写作模型", "结构化抽取模型")),
         "模型列表与真实测试入口可见": "保存并读取模型列表" in settings_dom and "测试快速模型" in settings_dom,
+        "百炼 ASR 可配置并有真实音频测试入口": voice_result.returncode == 0
+            and "qwen3-asr-flash" in voice_dom and "保存并测试音频" in voice_dom,
+        "内容提取支持真实音频上传": extraction_result.returncode == 0
+            and "上传真实音频" in extraction_dom and "上传并生成转写计划" in extraction_dom,
+        "复盘页面使用真实快照口径": retro_result.returncode == 0
+            and "真实发布" in retro_dom and "待采集快照" in retro_dom,
     }
     for name, passed in checks.items():
         print(f"  {'[PASS]' if passed else '[FAIL]'} {name}")
+    if not checks["复盘页面使用真实快照口径"]:
+        print("    debug:", {"returncode": retro_result.returncode,
+              "has_real_publication": "真实发布" in retro_dom,
+              "has_pending_snapshot": "待采集快照" in retro_dom,
+              "dom_chars": len(retro_dom), "stderr": retro_result.stderr[-300:]})
     return 0 if all(checks.values()) else 1
 
 

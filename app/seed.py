@@ -527,7 +527,10 @@ def _seed_jobs() -> None:
         started = ts(0, 8) if status != "QUEUED" else None
         finished = ts(0, 9) if status == "SUCCEEDED" else None
         execute(
-            "INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO jobs(id,user_id,task_type,status,current_step,progress,"
+            "input_json,plan_json,output_json,error_json,trace_id,cost_est,"
+            "cost_actual,created_at,started_at,finished_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (jid, "u-zhou", ttype, status, step, progress, jdumps(input_),
              jdumps({}), jdumps({}), jdumps(error) if error else None,
              new_trace_id(), cost, cost if status == "SUCCEEDED" else 0,

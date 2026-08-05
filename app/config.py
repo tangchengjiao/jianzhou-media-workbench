@@ -40,7 +40,7 @@ def set_demo_mode(enabled: bool) -> None:
     global DEMO_MODE
     DEMO_MODE = bool(enabled)
 MAX_IMPORT_UPLOAD_BYTES = int(os.environ.get("JIANZHOU_MAX_IMPORT_BYTES", str(10 * 1024 * 1024)))
-MAX_AUDIO_UPLOAD_BYTES = int(os.environ.get("JIANZHOU_MAX_AUDIO_BYTES", str(25 * 1024 * 1024)))
+MAX_AUDIO_UPLOAD_BYTES = int(os.environ.get("JIANZHOU_MAX_AUDIO_BYTES", str(10 * 1024 * 1024)))
 
 APP_NAME = "见舟 · 自媒体运营工作台"
 APP_VERSION = "2.1.0"
@@ -57,7 +57,13 @@ DEFAULT_SETTINGS = {
         "cache_policy": "元数据 24h · 媒体 30 天 · ASR 永久",
     },
     "voice": {
-        "stt_provider": "本地 faster-whisper（small · CPU）",
+        "configVersion": 2,
+        "stt_provider": "aliyun_bailian",
+        "protocol": "openai_compatible_audio",
+        "auth_mode": "bearer",
+        "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "api_key": "",
+        "asr_model": "qwen3-asr-flash",
         "tts_provider": "系统语音",
         "interview_mode": "按键说话（推荐 · 可审计）",
         "language": "zh",
@@ -83,6 +89,7 @@ DEFAULT_SETTINGS = {
         "max_media_minutes": 10,
         "max_comments": 1000,
         "cache_days": 30,
+        "weekly_capacity_hours": 14,
     },
     "local": {
         "auto_backup": "每日 03:00 · 保留 7 份",

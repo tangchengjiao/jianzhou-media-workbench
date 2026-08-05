@@ -181,18 +181,23 @@ def main() -> int:
         r = c.post("/api/publications",
                    json={"task_id": tid, "platform": "抖音", "url": "https://example.com/smoke",
                          "final_title": "冒烟测试内容"})
-        check("发布登记接口可用（不以此证明快照调度已实现）", r.status_code == 200)
+        pub = r.json()["data"]
+        check("发布登记并创建 T+1/T+3/T+7 快照计划",
+              r.status_code == 200 and len(pub["schedules"]) == 3)
 
         # 复盘与规则
-        r = c.get("/api/retro/report/P-201")
-        check("演示复盘样本可读取（不以此证明自动回收链路）",
-              r.json()["data"]["prediction"]["locked"] == 1 and len(r.json()["data"]["snapshots"]) == 3)
-        r = c.get("/api/rules/suggestions")
-        sug = next(s for s in r.json()["data"] if s["status"] == "pending")
-        r = c.post(f"/api/rules/suggestions/{sug['id']}/approve")
-        check("规则建议人工确认后生效", r.status_code == 200)
+        r = c.post(f"/api/retro/publications/{pub['id']}/snapshots",
+                   json={"tn":"T+1","plays":1000,"likes":50,"comments":10,"collects":20})
+        check("真实人工快照写入", r.status_code == 200)
+        r = c.post(f"/api/retro/publications/{pub['id']}/generate")
+        generated = r.json()["data"]
+        check("复盘基于真实快照生成", generated["report"]["actual"]["engagement_rate"] == 8.0)
+        r = c.post(f"/api/rules/suggestions/{generated['rule_suggestion_id']}/approve")
+        approved_rule = r.json()["data"]
+        check("规则建议人工确认并创建规则包版本",
+              r.status_code == 200 and bool(approved_rule["package_version_id"]))
         r = c.get("/api/rules")
-        check("规则已进入经验库", any(x["text"] == sug["rule_text"] for x in r.json()["data"]))
+        check("规则已进入经验库", any(x["id"] == approved_rule["rule_id"] for x in r.json()["data"]))
 
         # ---------- 3. 无兜底专项 ----------
         print("【3】无静默兜底专项")
@@ -238,6 +243,10 @@ def main() -> int:
         imp = r.json()["data"]
         check("部分导入：状态为 partial 且失败行明示",
               imp["status"] == "partial" and imp["failed"] == 1 and imp["errors"][0]["row"] == 2)
+        r = c.post(f"/api/imports/{imp['batch_id']}/commit")
+        check("导入确认后真实写入语料记录", r.status_code == 200 and "已写入 1 条" in r.json()["data"]["note"])
+        r = c.post(f"/api/imports/{imp['batch_id']}/rollback")
+        check("导入批次可真实回滚", r.status_code == 200 and "已整体回滚" in r.json()["data"]["note"])
 
         # 访谈：文字访谈 → 字段候选 → 确认
         r = c.post("/api/profile/interviews", json={"topic": "完整建档", "mode": "text"})

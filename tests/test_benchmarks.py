@@ -78,7 +78,7 @@ class BenchmarkFlowTests(unittest.TestCase):
         self.assertEqual(result["sync_status"], "ready")
         self.assertGreater(result["works"], 0)
         self.assertEqual(result["signal_category"], "manual")
-        self.assertEqual(result["schema_version"], 4)
+        self.assertEqual(result["schema_version"], 6)
         self.assertEqual(result["scan_count"], 47)
         self.assertTrue(result["has_sync_columns"])
 

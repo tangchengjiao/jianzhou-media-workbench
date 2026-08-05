@@ -151,10 +151,10 @@
       return {
         tab: 'execution', settings: {}, diag: null, errors: [], usage: null,
         ledger: [], traceQ: '', traceResult: null, saving: false,
-        testingSource: false, testingLlm: false, loadingModels: false,
+        testingSource: false, testingLlm: false, testingAsr: false, loadingModels: false,
         sourceTest: { platform: 'douyin', link: '' },
-        sourceResult: null, llmResult: null, availableModels: [],
-        secretDrafts: { source: '', llm: '' },
+        sourceResult: null, llmResult: null, asrResult: null, asrFile: null, availableModels: [],
+        secretDrafts: { source: '', llm: '', voice: '' },
         tabs: [
           ['execution', '运行模式'], ['source', '数据来源'], ['llm', '大模型'], ['voice', '语音模型'],
           ['cost', '成本控制'], ['local', '本地数据'], ['diag', '系统诊断'],
@@ -192,6 +192,7 @@
           delete values.api_key_configured;
           if (section === 'source' && this.secretDrafts.source) values.tikhub_api_key = this.secretDrafts.source;
           if (section === 'llm' && this.secretDrafts.llm) values.api_key = this.secretDrafts.llm;
+          if (section === 'voice' && this.secretDrafts.voice) values.api_key = this.secretDrafts.voice;
           const r = await api.put('/api/settings', { section, values });
           if (section === 'source' && this.settings.datasource) {
             await api.put('/api/settings', { section: 'datasource', values: this.settings.datasource });
@@ -245,6 +246,18 @@
         } catch (e) { handleError(e); }
         this.testingLlm = false;
       },
+      pickAsrFile(event) { this.asrFile = event.target.files && event.target.files[0]; },
+      async testAsr() {
+        if (!this.asrFile) return toast('请先选择一个 10 MB 以内的音频文件', 'warn');
+        if (!(await this.save('voice', false))) return;
+        this.testingAsr = true; this.asrResult = null;
+        try {
+          const form = new FormData(); form.append('file', this.asrFile);
+          this.asrResult = await api.upload('/api/stt/check', form);
+          toast(this.asrResult.note);
+        } catch (e) { handleError(e); }
+        this.testingAsr = false;
+      },
       async queryTrace() {
         if (!this.traceQ.trim()) return;
         try {
@@ -267,6 +280,7 @@
           daily_budget: '每日预算（¥）', monthly_budget: '每月预算（¥）',
           confirm_threshold: '单次任务确认阈值（¥）', max_media_minutes: '媒体最长（分钟）',
           max_comments: '评论最多（条）', cache_days: '缓存有效期（天）',
+          weekly_capacity_hours: '每周内容产能（小时）',
           auto_backup: '自动备份', theme: '主题（light / dark）',
         };
         return Object.keys(v).filter((k) => !k.endsWith('_configured'))
@@ -337,11 +351,21 @@
         </div>
       </div>
 
-      <div class="card section-gap" v-if="tab==='voice' && settings.voice"><div class="card-body">
-        <div class="settings-section-head"><div><div class="settings-section-title">语音模型</div><p>当前版本尚未接通真实 STT/TTS Provider；以下语言与热词会保存，但不会被包装成“已生效”。</p></div><span class="badge b-warn">PARTIAL</span></div>
-        <div class="callout c-warn"><span>⚠</span><span>真实模式下语音转写会明确返回 STT_PROVIDER_UNAVAILABLE，不会静默换成文字输入或演示结果。</span></div>
-        <div class="grid g2"><label class="field"><span>STT Provider</span><input class="input" disabled v-model="settings.voice.stt_provider"><small>本地 faster-whisper 安装器尚未实现。</small></label><label class="field"><span>TTS Provider</span><input class="input" disabled v-model="settings.voice.tts_provider"><small>TTS 调用链尚未实现。</small></label><label class="field"><span>转写语言</span><input class="input" v-model="settings.voice.language"></label><label class="field"><span>热词词典</span><input class="input" v-model="settings.voice.hot_words"></label></div>
-        <button class="btn btn-pri" :disabled="saving" @click="save('voice')">保存语言与热词</button>
+      <div class="card section-gap settings-provider-card" v-if="tab==='voice' && settings.voice"><div class="card-body">
+        <div class="settings-section-head"><div><div class="settings-section-title">阿里云百炼语音识别</div><p>已接通 qwen3-asr-flash 的真实音频转写；测试会发起一次可能计费的请求。TTS 仍保持明确未实现。</p></div><span class="badge" :class="settings.voice.api_key_configured?'b-ok':'b-warn'">{{ settings.voice.api_key_configured ? 'ASR Key 已保存' : '待配置 Key' }}</span></div>
+        <div class="grid g2 settings-config-grid">
+          <label class="field"><span>STT Provider</span><select class="input" v-model="settings.voice.stt_provider"><option value="aliyun_bailian">阿里云百炼</option></select></label>
+          <label class="field"><span>协议</span><select class="input" v-model="settings.voice.protocol"><option value="openai_compatible_audio">OpenAI Compatible Audio</option></select></label>
+          <label class="field"><span>API Base URL</span><input class="input mono" v-model="settings.voice.api_base"></label>
+          <label class="field"><span>API Key（DPAPI 加密）</span><input class="input mono" type="password" v-model="secretDrafts.voice" :placeholder="settings.voice.api_key_configured ? '已配置 · 留空表示不修改' : '粘贴百炼 API Key'"></label>
+          <label class="field"><span>ASR 模型</span><input class="input mono" v-model="settings.voice.asr_model"></label>
+          <label class="field"><span>转写语言</span><select class="input" v-model="settings.voice.language"><option value="zh">中文</option><option value="en">英语</option><option value="yue">粤语</option></select></label>
+          <label class="field"><span>热词词典</span><input class="input" v-model="settings.voice.hot_words"></label>
+          <label class="field"><span>TTS Provider · 尚未接入</span><input class="input" disabled v-model="settings.voice.tts_provider"><small>不会显示成已生效。</small></label>
+          <label class="field"><span>真实测试音频（≤10 MB）</span><input class="input" type="file" accept="audio/*,video/mp4" @change="pickAsrFile"><small>音频仅用于本次真实转写测试。</small></label>
+        </div>
+        <div class="settings-actions"><button class="btn btn-pri" :disabled="saving" @click="save('voice')">保存 ASR 配置</button><button class="btn" :disabled="saving||testingAsr" @click="testAsr">{{ testingAsr ? '正在转写…' : '保存并测试音频' }}</button></div>
+        <div class="callout c-ok" role="status" aria-live="polite" v-if="asrResult"><span>✓</span><span>{{ asrResult.note }} · {{ asrResult.model }}<br>{{ asrResult.text }}</span></div>
       </div></div>
 
       <div class="card section-gap" v-if="['cost','local'].includes(tab) && settings[tab]"><div class="card-body">
