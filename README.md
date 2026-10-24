@@ -255,6 +255,15 @@ macOS 需在 Mac 上执行 `bash packaging/build_macos.sh`。仓库也提供手�
 
 历史文档保留对应日期的状态；当前行为请结合源码和实际服务配置确认。
 
+<!-- JIANZHOU-CONTACT-QR:START -->
+## 联系二维码
+
+| 微信 | 抖音 | 视频号 | 公众号 |
+| :---: | :---: | :---: | :---: |
+| <img src="https://hualian-ai.pages.dev/assets/contact/wechat-qr.png" alt="见舟微信二维码" width="160"> | <img src="https://hualian-ai.pages.dev/assets/contact/douyin-qr.png" alt="见舟抖音二维码" width="160"> | <img src="https://hualian-ai.pages.dev/assets/contact/channels-qr.png" alt="见舟AI赋能视频号二维码" width="160"> | <img src="https://hualian-ai.pages.dev/assets/contact/official-account-qr.jpg" alt="公众号二维码" width="160"> |
+| `DST10209` | `74683161410` | 见舟AI赋能 | 扫码关注 |
+<!-- JIANZHOU-CONTACT-QR:END -->
+
 <!-- JIANZHOU-PUBLIC-INFO:START -->
 ## 企业服务与联系
 
@@ -266,8 +275,5 @@ macOS 需在 Mac 上执行 `bash packaging/build_macos.sh`。仓库也提供手�
 
 咨询联系人：**见舟** · 微信：**`DST10209`**
 
-| 微信 | 抖音 | 视频号 | 公众号 |
-| :---: | :---: | :---: | :---: |
-| <img src="https://hualian-ai.pages.dev/assets/contact/wechat-qr.png" alt="见舟微信二维码" width="160"> | <img src="https://hualian-ai.pages.dev/assets/contact/douyin-qr.png" alt="见舟抖音二维码" width="160"> | <img src="https://hualian-ai.pages.dev/assets/contact/channels-qr.png" alt="见舟AI赋能视频号二维码" width="160"> | <img src="https://hualian-ai.pages.dev/assets/contact/official-account-qr.jpg" alt="公众号二维码" width="160"> |
-| `DST10209` | `74683161410` | 见舟AI赋能 | 扫码关注 |
+<img src="https://hualian-ai.pages.dev/assets/contact/wechat-qr.png" alt="见舟微信二维码" width="200">
 <!-- JIANZHOU-PUBLIC-INFO:END -->
