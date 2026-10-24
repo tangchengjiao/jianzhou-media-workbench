@@ -266,7 +266,8 @@ macOS 需在 Mac 上执行 `bash packaging/build_macos.sh`。仓库也提供手�
 
 咨询联系人：**见舟** · 微信：**`DST10209`**
 
-<img src="https://hualian-ai.pages.dev/assets/contact/wechat-qr.png" alt="见舟微信二维码" width="200">
-
-抖音：`74683161410` · 视频号：见舟AI赋能
+| 微信 | 抖音 | 视频号 | 公众号 |
+| :---: | :---: | :---: | :---: |
+| <img src="https://hualian-ai.pages.dev/assets/contact/wechat-qr.png" alt="见舟微信二维码" width="160"> | <img src="https://hualian-ai.pages.dev/assets/contact/douyin-qr.png" alt="见舟抖音二维码" width="160"> | <img src="https://hualian-ai.pages.dev/assets/contact/channels-qr.png" alt="见舟AI赋能视频号二维码" width="160"> | <img src="https://hualian-ai.pages.dev/assets/contact/official-account-qr.jpg" alt="公众号二维码" width="160"> |
+| `DST10209` | `74683161410` | 见舟AI赋能 | 扫码关注 |
 <!-- JIANZHOU-PUBLIC-INFO:END -->
