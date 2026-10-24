@@ -255,15 +255,18 @@ macOS 需在 Mac 上执行 `bash packaging/build_macos.sh`。仓库也提供手�
 
 历史文档保留对应日期的状态；当前行为请结合源码和实际服务配置确认。
 
-## 联系见舟
+<!-- JIANZHOU-PUBLIC-INFO:START -->
+## 企业服务与联系
 
-我是 **见舟**，分享 AI 工具与内容工作流实践。
+**华链 AI** · 企业 AI 业务落地与内生能力建设
 
-**微信：`DST10209`** · **抖音：见舟AI（`74683161410`）** · **视频号：见舟AI赋能**
+培训与 FDE 培养 · 场景验证 · 智能体定制 · 企业实施 · 产品应用支持
 
-| 微信 | 抖音 | 视频号 | 公众号 |
-| :---: | :---: | :---: | :---: |
-| <a href="docs/assets/contact/wechat-qr.png"><img src="docs/assets/contact/wechat-qr.png" alt="见舟微信二维码" width="180" height="180"></a> | <a href="docs/assets/contact/douyin-qr.png"><img src="docs/assets/contact/douyin-qr.png" alt="见舟AI抖音码" width="180" height="180"></a> | <a href="docs/assets/contact/channels-qr.png"><img src="docs/assets/contact/channels-qr.png" alt="见舟AI赋能视频号码" width="180" height="180"></a> | <a href="docs/assets/contact/official-account-qr.jpg"><img src="docs/assets/contact/official-account-qr.jpg" alt="见舟提供的公众号二维码" width="180" height="180"></a> |
-| `DST10209` | `74683161410` | 见舟AI赋能 | 扫码关注 |
+[华链 AI 官网](https://hualian-ai.fondmule128.chatgpt.site) · [企业服务](https://hualian-ai.fondmule128.chatgpt.site/services/) · [服务参考价](https://hualian-ai.fondmule128.chatgpt.site/pricing/) · [企业宣传册](https://hualian-ai.fondmule128.chatgpt.site/downloads/company-brochure.pdf) · [合作咨询](https://hualian-ai.fondmule128.chatgpt.site/contact/)
 
-点击图片可查看原尺寸，或保存后使用对应 App 扫码。
+咨询联系人：**见舟** · 微信：**`DST10209`**
+
+<img src="https://raw.githubusercontent.com/tangchengjiao/hualian-ai-brand-center/main/public/assets/contact/wechat-qr.png" alt="见舟微信二维码" width="200">
+
+抖音：`74683161410` · 视频号：见舟AI赋能
+<!-- JIANZHOU-PUBLIC-INFO:END -->
