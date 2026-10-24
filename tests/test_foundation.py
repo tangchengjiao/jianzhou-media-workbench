@@ -118,6 +118,35 @@ class FoundationTests(unittest.TestCase):
         self.assertFalse(result["raw_key_in_response"])
         self.assertTrue(result["configured"])
 
+    def test_macos_secret_store_uses_login_keychain_not_local_file(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from app import secret_store
+
+        calls = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            if command[1] == "find-generic-password":
+                return SimpleNamespace(returncode=0, stdout="keychain-secret\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with tempfile.TemporaryDirectory(prefix="jianzhou-mac-keychain-") as temp:
+            fake_file = pathlib.Path(temp) / "secrets.json"
+            with patch.object(secret_store.sys, "platform", "darwin"), \
+                    patch.object(secret_store, "SECRET_FILE", fake_file), \
+                    patch.object(secret_store.subprocess, "run", side_effect=fake_run):
+                secret_store.set_secret("llm_api_key", "keychain-secret")
+                value = secret_store.get_secret("llm_api_key")
+                secret_store.set_secret("llm_api_key", "")
+            file_exists = fake_file.exists()
+
+        self.assertEqual(value, "keychain-secret")
+        self.assertEqual([call[1] for call in calls], [
+            "add-generic-password", "find-generic-password", "delete-generic-password",
+        ])
+        self.assertFalse(file_exists)
+
     def test_transaction_rolls_back(self):
         result = run_isolated("""
             import json

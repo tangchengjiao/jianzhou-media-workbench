@@ -2,6 +2,7 @@
 # 见舟工作台 · PyInstaller 打包配置（预留，首版不执行）
 # 用法见 packaging/打包说明.md
 
+import sys
 from pathlib import Path
 
 SPEC_LOCATION = Path(SPECPATH).resolve()
@@ -37,7 +38,7 @@ a = Analysis(
     excludes=[
         "tests", "scripts", "IPython", "jupyter", "notebook",
         "matplotlib", "numpy", "pandas", "scipy", "sklearn", "sympy",
-        "torch", "tensorflow", "cv2", "PIL", "tkinter",
+        "torch", "tensorflow", "cv2", "tkinter",
         "PyQt5", "PyQt6", "PySide2", "PySide6",
     ],
     noarchive=False,
@@ -58,7 +59,7 @@ exe = EXE(
     upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,          # 保留控制台便于查看本地服务日志与 Trace
+    console=True,          # 关闭控制台即会终止本地服务；错误详情同时写入本地日志
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -66,3 +67,19 @@ exe = EXE(
     entitlements_file=None,
     icon=None,             # 可后续替换为 packaging/jianzhou.ico
 )
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        exe,
+        name="见舟工作台.app",
+        icon=None,
+        bundle_identifier="com.jianzhou.media-workbench",
+        info_plist={
+            "CFBundleName": "见舟工作台",
+            "CFBundleDisplayName": "见舟工作台",
+            "CFBundleShortVersionString": "2.1.0",
+            "CFBundleVersion": "2.1.0",
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "12.0",
+        },
+    )

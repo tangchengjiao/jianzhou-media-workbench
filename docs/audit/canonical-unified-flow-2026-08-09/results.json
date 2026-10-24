@@ -1,0 +1,129 @@
+{
+  "captured_at": "2026-08-09T13:20:45",
+  "base_url": "http://127.0.0.1:8741/",
+  "steps": [
+    {
+      "step": 1,
+      "slug": "workbench",
+      "url": "http://127.0.0.1:8741/#/workbench",
+      "expected": [
+        "工作总台",
+        "视觉工厂",
+        "资料中心"
+      ],
+      "missing": [],
+      "bad_markers": [],
+      "health": "ok",
+      "screenshot": "D:\\见舟新媒体工作台项目\\docs\\audit\\canonical-unified-flow-2026-08-09\\01-workbench.png"
+    },
+    {
+      "step": 2,
+      "slug": "visual-factory-studio",
+      "url": "http://127.0.0.1:8741/#/visuals",
+      "expected": [
+        "视觉工厂",
+        "封面生成",
+        "图文生成",
+        "生成历史"
+      ],
+      "missing": [],
+      "bad_markers": [],
+      "health": "ok",
+      "screenshot": "D:\\见舟新媒体工作台项目\\docs\\audit\\canonical-unified-flow-2026-08-09\\02-visual-factory-studio.png"
+    },
+    {
+      "step": 3,
+      "slug": "visual-assets-templates",
+      "url": "http://127.0.0.1:8741/#/visuals",
+      "expected": [
+        "IP视觉资产",
+        "模板库",
+        "新建模板"
+      ],
+      "missing": [],
+      "bad_markers": [],
+      "health": "ok",
+      "screenshot": "D:\\见舟新媒体工作台项目\\docs\\audit\\canonical-unified-flow-2026-08-09\\03-visual-assets-templates.png"
+    },
+    {
+      "step": 4,
+      "slug": "asset-center",
+      "url": "http://127.0.0.1:8741/#/packages",
+      "expected": [
+        "资料中心",
+        "原始内容",
+        "拆解与模式",
+        "视觉资产",
+        "发布与复盘"
+      ],
+      "missing": [],
+      "bad_markers": [],
+      "health": "ok",
+      "screenshot": "D:\\见舟新媒体工作台项目\\docs\\audit\\canonical-unified-flow-2026-08-09\\04-asset-center.png"
+    },
+    {
+      "step": 5,
+      "slug": "content-plan",
+      "url": "http://127.0.0.1:8741/#/plan",
+      "expected": [
+        "内容计划",
+        "内容库存看板",
+        "待发布",
+        "发布登记"
+      ],
+      "missing": [],
+      "bad_markers": [],
+      "health": "ok",
+      "screenshot": "D:\\见舟新媒体工作台项目\\docs\\audit\\canonical-unified-flow-2026-08-09\\05-content-plan.png"
+    },
+    {
+      "step": 6,
+      "slug": "creation-workshop",
+      "url": "http://127.0.0.1:8741/#/creation",
+      "expected": [
+        "创作工坊",
+        "选择来源",
+        "版本历史",
+        "AI 发布前预测"
+      ],
+      "missing": [],
+      "bad_markers": [],
+      "health": "ok",
+      "screenshot": "D:\\见舟新媒体工作台项目\\docs\\audit\\canonical-unified-flow-2026-08-09\\06-creation-workshop.png"
+    },
+    {
+      "step": 7,
+      "slug": "publication-retro",
+      "url": "http://127.0.0.1:8741/#/retro",
+      "expected": [
+        "数据复盘",
+        "真实发布",
+        "已存快照",
+        "规则建议"
+      ],
+      "missing": [],
+      "bad_markers": [],
+      "health": "ok",
+      "screenshot": "D:\\见舟新媒体工作台项目\\docs\\audit\\canonical-unified-flow-2026-08-09\\07-publication-retro.png"
+    },
+    {
+      "step": 8,
+      "slug": "system-version-diagnostics",
+      "url": "http://127.0.0.1:8741/#/settings",
+      "expected": [
+        "当前版本与数据源",
+        "workspace-schema23-visual-assets-lifecycle",
+        "视觉工厂",
+        "统一资料中心",
+        "创作生命周期"
+      ],
+      "missing": [],
+      "bad_markers": [],
+      "health": "ok",
+      "screenshot": "D:\\见舟新媒体工作台项目\\docs\\audit\\canonical-unified-flow-2026-08-09\\08-system-version-diagnostics.png"
+    }
+  ],
+  "console_errors": [],
+  "page_errors": [],
+  "passed": true
+}

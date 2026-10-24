@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>见舟 · 自媒体运营工作台</title>
-<link rel="stylesheet" href="/assets/css/app.css">
+<link rel="stylesheet" href="/assets/css/app.css?v=20260811-file-picker-v7">
 </head>
 <body>
 <div id="app" v-cloak>
@@ -63,7 +63,20 @@
         </div>
       </header>
       <main class="content">
-        <component :is="currentPageComponent" :key="page"></component>
+        <section class="page-runtime-error" v-if="pageError" role="alert">
+          <div class="page-runtime-error-icon">!</div>
+          <div>
+            <h2>{{ pageError.title }}加载失败</h2>
+            <p>页面发生了可定位的运行时错误，系统已保留诊断信息。你的本地数据没有被删除。</p>
+            <code>{{ pageError.message }}</code>
+            <div class="page-runtime-error-actions">
+              <button class="btn btn-pri" @click="retryPage">重新加载本页</button>
+              <button class="btn" @click="copyPageError">复制诊断信息</button>
+              <button class="btn" @click="go('settings')">前往系统诊断</button>
+            </div>
+          </div>
+        </section>
+        <component v-else :is="currentPageComponent" :key="page"></component>
       </main>
     </div>
   </div>
@@ -80,14 +93,16 @@
 
 <script src="/assets/js/vue.global.prod.js"></script>
 <script src="/assets/js/api.js"></script>
-<script src="/assets/js/store.js"></script>
-<script src="/assets/js/components.js"></script>
-<script src="/assets/js/pages/base.js"></script>
+<script src="/assets/js/store.js?v=20260810-toast-dedupe"></script>
+<script src="/assets/js/components.js?v=20260806-publication-flow"></script>
+<script src="/assets/js/pages/base.js?v=20260806-plan-nav-fix"></script>
 <script src="/assets/js/pages/insight.js"></script>
 <script src="/assets/js/pages/radar.js"></script>
-<script src="/assets/js/pages/create.js"></script>
+<script src="/assets/js/pages/create.js?v=20260811-channel-layout-v6"></script>
+<script src="/assets/js/pages/visuals.js?v=20260809-graphic-editor-v5"></script>
+<script src="/assets/js/pages/channels.js?v=20260811-channel-layout-v6"></script>
 <script src="/assets/js/pages/review.js"></script>
-<script src="/assets/js/pages/system.js"></script>
+<script src="/assets/js/pages/system.js?v=20260811-file-picker-v7"></script>
 <script src="/assets/js/app.js"></script>
 </body>
 </html>

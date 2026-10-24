@@ -1,7 +1,8 @@
-"""Windows DPAPI-backed local secret storage.
+"""OS credential-store-backed local secret storage.
 
-Secrets are encrypted for the current Windows user and kept outside SQLite so
-settings exports, database backups and diagnostics do not disclose API keys.
+Windows uses DPAPI and macOS uses the user's login Keychain. Secrets stay
+outside SQLite so settings exports, database backups and diagnostics do not
+disclose API keys. Other operating systems support environment variables only.
 """
 
 from __future__ import annotations
@@ -10,8 +11,12 @@ import base64
 import ctypes
 import json
 import os
-from ctypes import wintypes
+import subprocess
+import sys
 from pathlib import Path
+
+if os.name == "nt":
+    from ctypes import wintypes
 
 from .config import DATA_DIR
 from .errors import AppError
@@ -21,12 +26,67 @@ _ENV_KEYS = {
     "tikhub_api_key": "JIANZHOU_TIKHUB_API_KEY",
     "llm_api_key": "JIANZHOU_LLM_API_KEY",
     "asr_api_key": "JIANZHOU_ASR_API_KEY",
+    "image_api_key": "JIANZHOU_IMAGE_API_KEY",
+    "wechat_app_secret": "JIANZHOU_WECHAT_APP_SECRET",
 }
 
 
-class _DataBlob(ctypes.Structure):
-    _fields_ = [("cbData", wintypes.DWORD),
-                ("pbData", ctypes.POINTER(ctypes.c_char))]
+if os.name == "nt":
+    class _DataBlob(ctypes.Structure):
+        _fields_ = [("cbData", wintypes.DWORD),
+                    ("pbData", ctypes.POINTER(ctypes.c_char))]
+
+
+_KEYCHAIN_SERVICE = "com.jianzhou.media-workbench"
+
+
+def _keychain_get(name: str) -> str:
+    completed = subprocess.run(
+        ["security", "find-generic-password", "-s", _KEYCHAIN_SERVICE,
+         "-a", name, "-w"],
+        capture_output=True, text=True, encoding="utf-8", timeout=15, check=False,
+    )
+    if completed.returncode == 44:  # item not found
+        return ""
+    if completed.returncode:
+        raise AppError(
+            "SECRET_STORE_FAILED",
+            "无法读取 macOS 钥匙串，请确认当前用户允许访问登录钥匙串。",
+            stage="secret_store", details={"return_code": completed.returncode},
+            http_status=500,
+        )
+    return completed.stdout.rstrip("\r\n")
+
+
+def _keychain_set(name: str, value: str) -> None:
+    if value:
+        command = [
+            "security", "add-generic-password", "-U", "-s", _KEYCHAIN_SERVICE,
+            "-a", name, "-w", value,
+        ]
+        completed = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8",
+            timeout=15, check=False,
+        )
+        if completed.returncode:
+            raise AppError(
+                "SECRET_STORE_FAILED",
+                "无法写入 macOS 钥匙串，API Key 未保存。",
+                stage="secret_store", details={"return_code": completed.returncode},
+                http_status=500,
+            )
+        return
+    completed = subprocess.run(
+        ["security", "delete-generic-password", "-s", _KEYCHAIN_SERVICE,
+         "-a", name],
+        capture_output=True, text=True, encoding="utf-8", timeout=15, check=False,
+    )
+    if completed.returncode not in (0, 44):
+        raise AppError(
+            "SECRET_STORE_FAILED", "无法从 macOS 钥匙串删除 API Key。",
+            stage="secret_store", details={"return_code": completed.returncode},
+            http_status=500,
+        )
 
 
 def _dpapi(operation: str, payload: bytes) -> bytes:
@@ -96,6 +156,10 @@ def get_secret(name: str) -> str:
     env_name = _ENV_KEYS.get(name)
     if env_name and os.environ.get(env_name):
         return os.environ[env_name]
+    if sys.platform == "darwin":
+        return _keychain_get(name)
+    if os.name != "nt":
+        return ""
     encoded = _load().get(name)
     if not encoded:
         return ""
@@ -115,6 +179,15 @@ def get_secret(name: str) -> str:
 
 
 def set_secret(name: str, value: str) -> None:
+    if sys.platform == "darwin":
+        _keychain_set(name, value)
+        return
+    if os.name != "nt":
+        raise AppError(
+            "SECRET_STORE_UNAVAILABLE",
+            "当前系统没有可用的安全凭据存储，请使用环境变量配置 API Key；系统不会明文落盘。",
+            stage="secret_store", http_status=503,
+        )
     values = _load()
     if value:
         encrypted = _dpapi("protect", value.encode("utf-8"))

@@ -1,0 +1,73 @@
+{
+  "mode": "real",
+  "browser": "Chrome",
+  "schema_version": 12,
+  "passed": 10,
+  "failed": 0,
+  "results": [
+    {
+      "name": "十二个主页面可加载且无疑似乱码",
+      "status": "PASS",
+      "seconds": 6.07,
+      "routes": {
+        "workbench": 1643,
+        "profile": 3296,
+        "account": 2282,
+        "radar": 15854,
+        "extraction": 1684,
+        "analysis": 2399,
+        "creation": 1163,
+        "plan": 465,
+        "retro": 318,
+        "growth": 286,
+        "packages": 514,
+        "settings": 398
+      }
+    },
+    {
+      "name": "工作总台历史任务标题已修复",
+      "status": "PASS",
+      "seconds": 0.54
+    },
+    {
+      "name": "本地见舟AI资料已进入真实IP档案并保留来源状态",
+      "status": "PASS",
+      "seconds": 0.54
+    },
+    {
+      "name": "本地内容资产库可切换历史来源并查看完整原文",
+      "status": "PASS",
+      "seconds": 1.6
+    },
+    {
+      "name": "历史拆解可切换且每条都能回看完整原文",
+      "status": "PASS",
+      "seconds": 1.12
+    },
+    {
+      "name": "真实拆解已进入创作项目且创作工坊不再卡加载",
+      "status": "PASS",
+      "seconds": 0.9
+    },
+    {
+      "name": "自有作品沉淀、单条提取与批量确认入口",
+      "status": "PASS",
+      "seconds": 4.98
+    },
+    {
+      "name": "新对标账号真实抓取与原作链接",
+      "status": "PASS",
+      "seconds": 3.55
+    },
+    {
+      "name": "AIHot 连接器识别、同步记录与真实预览",
+      "status": "PASS",
+      "seconds": 5.38
+    },
+    {
+      "name": "浏览器控制台无严重错误",
+      "status": "PASS",
+      "errors": []
+    }
+  ]
+}

@@ -145,7 +145,9 @@ def _seed_profile() -> None:
          "语料包统计 42 份脚本 · 推断类型 inferred · 需人工确认", "pending"),
     ]
     for cid, path, val, itype, conf, ev, status in cands:
-        execute("INSERT INTO profile_field_candidates VALUES(?,?,?,?,?,?,?,?,?,?)",
+        execute("INSERT INTO profile_field_candidates"
+                "(id,user_id,session_id,field_path,value,inference_type,confidence,evidence,status,created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (cid, "u-zhou", "iv-8", path, val, itype, conf, ev, status, ts(-2)))
 
     # 暂停中的访谈会话 #8
@@ -210,7 +212,9 @@ def _seed_signals_and_contents() -> None:
     for sid, stype, platform, author, title, url, pub, metrics, rel, relev, timey, status, cat, src in signals:
         content_id = "SC-121" if sid == "SG-2042" else None
         execute(
-            "INSERT INTO signals VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO signals(id,user_id,source_type,platform,author,title,url,published_at,"
+            "metrics_json,rel_perf,relevance,timeliness,status,category,source,fetched_at,content_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (sid, "u-zhou", stype, platform, author, title, url, d(pub),
              jdumps(metrics), rel, relev, timey, status, cat, src,
              ts(0, 9), content_id))
@@ -240,6 +244,89 @@ def _seed_signals_and_contents() -> None:
              jdumps({"metadata": {"exists": True},
                      "benchmark_work_id": top_work}), ts(-1)))
 
+
+def ensure_data_scopes() -> None:
+    """Create isolated demo/real workspaces and move records we can classify safely.
+
+    The application already enforces ownership by ``user_id`` on virtually every
+    business query.  Dedicated workspace users therefore provide isolation without
+    rewriting or deleting persisted assets.  Only records with deterministic demo
+    markers are left in the demo workspace; uncertain rows are never deleted.
+    """
+    from .db import jloads, query, query_one
+
+    if not query_one("SELECT id FROM users WHERE id='u-local'"):
+        execute(
+            "INSERT INTO users VALUES(?,?,?,?)",
+            ("u-local", "我的真实工作空间", "舟", ts(0)),
+        )
+    for workspace_user_id, data_scope in (
+        ("u-zhou", "demo"),
+        ("u-tea", "demo"),
+        ("u-local", "real"),
+    ):
+        if query_one("SELECT id FROM users WHERE id=?", (workspace_user_id,)):
+            execute(
+                "INSERT OR REPLACE INTO workspace_users(user_id,data_scope) VALUES(?,?)",
+                (workspace_user_id, data_scope),
+            )
+
+    migration_marker = query_one(
+        "SELECT value_json FROM app_settings WHERE key='workspace_migration_v1'"
+    )
+    if not migration_marker:
+        _migrate_legacy_real_records(query)
+        execute(
+            "INSERT INTO app_settings(key,value_json) VALUES('workspace_migration_v1',?)",
+            (jdumps({"completed_at": ts(0)}),),
+        )
+
+    runtime_row = query_one("SELECT value_json FROM app_settings WHERE key='runtime'")
+    runtime = jloads(runtime_row["value_json"], {}) if runtime_row else {}
+    runtime.setdefault("active_demo_user", "u-zhou")
+    runtime.setdefault("active_real_user", "u-local")
+    runtime["active_user"] = runtime["active_demo_user"] if __import__(
+        "app.config", fromlist=["DEMO_MODE"]
+    ).DEMO_MODE else runtime["active_real_user"]
+    execute("INSERT OR REPLACE INTO app_settings VALUES('runtime',?)", (jdumps(runtime),))
+
+
+def _migrate_legacy_real_records(query) -> None:
+    """Classify legacy mixed-workspace rows exactly once without deleting data."""
+
+    # Accounts created through real providers are identifiable.  Fixed seed IDs
+    # remain demo even when an old seed used the generic provider name ``tikhub``.
+    execute(
+        "UPDATE accounts SET user_id='u-local' WHERE user_id='u-zhou' "
+        "AND id NOT IN ('acc-dy','acc-xhs','acc-bili','acc-gzh') "
+        "AND COALESCE(bound_provider,'') NOT LIKE 'demo_%'"
+    )
+    # Seed benchmark links deliberately contain ``demo_``; real user additions do not.
+    real_benchmarks = query(
+        "SELECT id FROM benchmark_accounts WHERE user_id='u-zhou' "
+        "AND COALESCE(link,'') NOT LIKE '%demo_%'"
+    )
+    for row in real_benchmarks:
+        execute("UPDATE benchmark_accounts SET user_id='u-local' WHERE id=?", (row["id"],))
+
+    # Provider-tagged real signals and their downstream content/analysis chain move
+    # together, preserving every stored artifact and evidence reference.
+    execute(
+        "UPDATE signals SET user_id='u-local' WHERE user_id='u-zhou' "
+        "AND COALESCE(source,'') NOT LIKE 'demo_%'"
+    )
+    execute(
+        "UPDATE source_contents SET user_id='u-local' WHERE user_id='u-zhou' "
+        "AND signal_id IN (SELECT id FROM signals WHERE user_id='u-local')"
+    )
+    execute(
+        "UPDATE analyses SET user_id='u-local' WHERE user_id='u-zhou' "
+        "AND source_content_id IN (SELECT id FROM source_contents WHERE user_id='u-local')"
+    )
+    execute(
+        "UPDATE media_assets SET user_id='u-local' WHERE user_id='u-zhou' "
+        "AND source_content_id IN (SELECT id FROM source_contents WHERE user_id='u-local')"
+    )
 
 def _seed_analysis() -> None:
     result = {
@@ -311,32 +398,38 @@ def _seed_creation() -> None:
     }
     outline = ["① 钩子：被打断是顺序问题", "② 我的咨询翻车案例",
                "③ 正确顺序：结论-风险-诉求", "④ 对照改写演示", "⑤ 清单 + 模板 CTA"]
-    execute("INSERT INTO creation_projects VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+    execute("INSERT INTO creation_projects(id,user_id,title,goal,audience,source_chain_json,"
+            "diff_strategy,outline_json,context_json,checks_json,status,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             ("CP-96", "u-zhou", "汇报被打断？先改顺序",
              "收藏率 > 账号均值 · 涨粉", "✓ 内容支柱「汇报表达」 · 目标用户吻合",
              jdumps(["拆解 #A-1024", "选题 #T-96"]),
              "同结构 · 不同案例：用我自己的 3 个咨询翻车案例（归因翻转结构，案例来自咨询记录 #C-31 #C-42）",
              jdumps(outline), jdumps(ctx), jdumps(checks), "DRAFTING", ts(-2)))
-    execute("INSERT INTO draft_versions VALUES(?,?,?,?,?,?,?)",
+    execute("INSERT INTO draft_versions(id,project_id,version_no,platform,content,note,created_at) VALUES(?,?,?,?,?,?,?)",
             (uid("dv"), "CP-96", 1, "抖音口播", "（初稿，已由风格适配与案例替换迭代）",
              "初稿生成", ts(-2)))
-    execute("INSERT INTO draft_versions VALUES(?,?,?,?,?,?,?)",
+    execute("INSERT INTO draft_versions(id,project_id,version_no,platform,content,note,created_at) VALUES(?,?,?,?,?,?,?)",
             (uid("dv"), "CP-96", 2, "抖音口播", "（风格适配口语化版本）",
              "风格适配（口语化）", ts(-1)))
-    execute("INSERT INTO draft_versions VALUES(?,?,?,?,?,?,?)",
+    execute("INSERT INTO draft_versions(id,project_id,version_no,platform,content,note,created_at) VALUES(?,?,?,?,?,?,?)",
             (uid("dv"), "CP-96", 3, "抖音口播", draft, "替换案例 2 · 当前", ts(-1)))
-    execute("INSERT INTO predictions VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+    execute("INSERT INTO predictions"
+            "(id,project_id,goal,expected_bucket,confidence,strengths,risks,hypothesis,user_judgement,locked,locked_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             ("pred-96", "CP-96", "收藏率 > 账号均值 · 涨粉", "高于均值 1.2–1.8×",
              0.62, "真实案例密度高", "选题近期同质化",
              "归因翻转结构对我的受众同样有效", "案例 3 可能太具体，但值得试。", 0, None))
 
     # 另一个写作中项目
-    execute("INSERT INTO creation_projects VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+    execute("INSERT INTO creation_projects(id,user_id,title,goal,audience,source_chain_json,"
+            "diff_strategy,outline_json,context_json,checks_json,status,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             ("CP-97", "u-zhou", "向上管理不是讨好", "互动率 > 均值",
              "✓ 内容支柱「向上管理」", jdumps(["选题 #T-92"]),
              "同问题 · 不同观点", jdumps(["① 立场先行", "② 反例", "③ 方法"]),
              jdumps(ctx), jdumps(checks), "DRAFTING", ts(-4)))
-    execute("INSERT INTO draft_versions VALUES(?,?,?,?,?,?,?)",
+    execute("INSERT INTO draft_versions(id,project_id,version_no,platform,content,note,created_at) VALUES(?,?,?,?,?,?,?)",
             (uid("dv"), "CP-97", 3, "图文", "（向上管理不是讨好 · v3，风格检查中）",
              "风格检查", ts(-1)))
 
@@ -366,22 +459,28 @@ def _seed_planning() -> None:
          [{"t": "回升中 📈", "c": "b-ok"}]),
     ]
     for tid, proj, title, status, platform, date_, est, pri, badges in tasks:
-        execute("INSERT INTO content_tasks VALUES(?,?,?,?,?,?,?,?,?,?)",
+        execute("INSERT INTO content_tasks(id,user_id,project_id,title,status,platform,scheduled_date,estimate_h,priority,badges_json) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (tid, "u-zhou", proj, title, status, platform, date_, est, pri,
                  jdumps(badges)))
 
     # 发布前判断必须先于引用它的发布记录写入。
-    execute("INSERT INTO predictions VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+    execute("INSERT INTO predictions"
+            "(id,project_id,goal,expected_bucket,confidence,strengths,risks,hypothesis,user_judgement,locked,locked_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             ("pred-201", None, "互动率 > 均值 · 验证反焦虑立场", "高于均值 1.2–1.8×",
              0.62, "评论区真实痛点", "开头可能太冲",
              "反鸡汤立场在副业话题有效", "开头可能太冲，但立场要坚持。", 1, ts(-7, 18)))
-    execute("INSERT INTO publications VALUES(?,?,?,?,?,?,?,?,?,?)",
+    execute("INSERT INTO publications(id,user_id,project_id,task_id,platform,url,published_at,"
+            "final_title,note,prediction_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
             ("P-201", "u-zhou", None, "CT-9", "抖音", "https://example.com/pub/201",
              ts(-7, 19), "我劝你别急着做副业", "", "pred-201"))
     snaps = [("T+1", 12000, 820, 96, 640, -6), ("T+3", 31000, 2400, 288, 1980, -4),
              ("T+7", 58000, 5100, 402, 4814, 0)]
     for tn, plays, likes, comments, collects, off in snaps:
-        execute("INSERT INTO publication_snapshots VALUES(?,?,?,?,?,?,?,?)",
+        execute("INSERT INTO publication_snapshots"
+                "(id,publication_id,tn,plays,likes,comments,collects,taken_at)"
+                " VALUES(?,?,?,?,?,?,?,?)",
                 (uid("sn"), "P-201", tn, plays, likes, comments, collects, ts(off, 8)))
 
 
@@ -403,7 +502,7 @@ def _seed_retro() -> None:
         ],
         "next": "将「反焦虑立场」纳入可复用模式 → 见规则建议 R-51。",
     }
-    execute("INSERT INTO retro_reports VALUES(?,?,?,?,?)",
+    execute("INSERT INTO retro_reports(id,user_id,publication_id,conclusion_json,created_at) VALUES(?,?,?,?,?)",
             ("RR-201", "u-zhou", "P-201", jdumps(report), ts(0, 8)))
 
     suggestions = [

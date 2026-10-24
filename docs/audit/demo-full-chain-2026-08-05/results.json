@@ -1,0 +1,12 @@
+{
+  "started_in_real_mode": true,
+  "signal_id": "SG-2040",
+  "source_content_id": "SC-445f3f",
+  "analysis_id": "A-03e3",
+  "pattern_id": "pt-588b10c0b3714304a5cfe6e1ce1f41e5",
+  "comparison_count": 4,
+  "project_id": "CP-533434946fe64e82a0e2ba7705619107",
+  "draft_versions": 7,
+  "screenshots": 4,
+  "restored_real_mode": true
+}

@@ -27,6 +27,29 @@ def run_isolated(source: str) -> dict:
 
 
 class ModelSettingsTests(unittest.TestCase):
+    def test_proxy_fake_ip_is_only_allowed_for_known_public_model_hosts(self):
+        result = run_isolated("""
+            import json, socket
+            from unittest.mock import patch
+            from app.errors import AppError
+            from app.providers import _validate_llm_url
+
+            fake_answer = [(socket.AF_INET, socket.SOCK_STREAM, 6, '',
+                            ('198.18.0.14', 443))]
+            with patch('app.providers.socket.getaddrinfo', return_value=fake_answer):
+                _validate_llm_url('https://api.deepseek.com', resolve_dns=True)
+                blocked = None
+                try:
+                    _validate_llm_url('https://models.example.com', resolve_dns=True)
+                except AppError as exc:
+                    blocked = exc.code
+            print(json.dumps({'official_passed': True, 'custom_blocked': blocked}))
+        """)
+        self.assertEqual(result, {
+            "official_passed": True,
+            "custom_blocked": "LLM_URL_BLOCKED",
+        })
+
     def test_custom_model_names_and_runtime_mode_reach_real_provider(self):
         result = run_isolated("""
             import json
@@ -118,6 +141,106 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertEqual(chat["payload"]["model"], "local-fast")
         self.assertEqual(chat["payload"]["messages"][1]["content"], "Reply with exactly: OK")
         self.assertIsNone(chat["authorization"])
+
+    def test_structured_analysis_requests_json_object_mode(self):
+        result = run_isolated("""
+            import json, threading
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+            from app.api.settings import SettingsIn, put_settings
+            from app.db import init_db
+            from app.main import _ensure_settings
+            from app.providers import RealLLMProvider
+
+            received = {}
+            class Handler(BaseHTTPRequestHandler):
+                def log_message(self, *_): pass
+                def do_POST(self):
+                    length = int(self.headers.get('Content-Length','0'))
+                    payload = json.loads(self.rfile.read(length) or b'{}')
+                    received.update(payload)
+                    content = json.dumps({
+                        'topic':'真实主题','target_audience':[],'user_problem':'',
+                        'hook':{},'structure':[],'key_turns':[],'evidence':[],
+                        'emotional_mechanisms':[],'golden_quotes':[],'cta':'',
+                        'comment_triggers':[],'reusable':[],'non_reusable':[]},
+                        ensure_ascii=False)
+                    body = json.dumps({'choices':[{'message':{'content':content}}],
+                                       'model':payload.get('model')}, ensure_ascii=False).encode()
+                    self.send_response(200); self.send_header('Content-Type','application/json')
+                    self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+
+            server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            init_db(); _ensure_settings()
+            put_settings(SettingsIn(section='llm', values={
+                'protocol':'openai_compatible','auth_mode':'none','allow_private_network':True,
+                'api_base':f'http://127.0.0.1:{server.server_port}/v1',
+                'analysis_model':'analysis-json'}))
+            output = RealLLMProvider().analyze('标题', '文案', {})
+            server.shutdown()
+            print(json.dumps({'format':received.get('response_format'),
+                              'topic':output['topic']}))
+        """)
+        self.assertEqual(result["format"], {"type": "json_object"})
+        self.assertEqual(result["topic"], "真实主题")
+
+    def test_openai_compatible_image_provider_contract_and_no_fallback(self):
+        result = run_isolated("""
+            import base64, io, json, threading
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+            from PIL import Image
+            from app.api.settings import SettingsIn, put_settings
+            from app.db import init_db
+            from app.errors import AppError
+            from app.image_provider import RealImageProvider
+            from app.main import _ensure_settings
+
+            output = io.BytesIO()
+            Image.new('RGB', (32, 32), '#123456').save(output, 'PNG')
+            png = base64.b64encode(output.getvalue()).decode()
+            received = []
+            fail = [False]
+            class Handler(BaseHTTPRequestHandler):
+                def log_message(self, *_): pass
+                def do_POST(self):
+                    length = int(self.headers.get('Content-Length','0'))
+                    received.append(json.loads(self.rfile.read(length) or b'{}'))
+                    if fail[0]:
+                        body = json.dumps({'error':{'message':'provider failed'}}).encode()
+                        self.send_response(503); self.send_header('Content-Type','application/json')
+                        self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+                        return
+                    body = json.dumps({'model':'image2-test','data':[{'b64_json':png}]}).encode()
+                    self.send_response(200); self.send_header('Content-Type','application/json')
+                    self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+
+            server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            init_db(); _ensure_settings()
+            put_settings(SettingsIn(section='image', values={
+                'protocol':'openai_compatible_images','auth_mode':'none',
+                'allow_private_network':True,
+                'api_base':f'http://127.0.0.1:{server.server_port}/v1',
+                'model':'image2-test','generation_path':'images/generations',
+                'default_mode':'ai_background','default_ratio':'3:4',
+                'default_variants':2,'quality':'high'}))
+            generated = RealImageProvider().generate('background only, no text', '3:4')
+            fail[0] = True
+            unavailable = None
+            try:
+                RealImageProvider().generate('must fail', '1:1')
+            except AppError as exc:
+                unavailable = exc.code
+            server.shutdown()
+            print(json.dumps({'model':generated['model'],'bytes':len(generated['bytes']),
+                              'payload':received,'unavailable':unavailable}))
+        """)
+        self.assertEqual(result["model"], "image2-test")
+        self.assertGreater(result["bytes"], 50)
+        self.assertEqual(result["payload"][0]["model"], "image2-test")
+        self.assertEqual(result["payload"][0]["size"], "1024x1536")
+        self.assertEqual(result["payload"][0]["response_format"], "b64_json")
+        self.assertEqual(result["unavailable"], "IMAGE_PROVIDER_ERROR")
 
 
 if __name__ == "__main__":

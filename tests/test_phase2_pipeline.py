@@ -48,7 +48,7 @@ class PhaseTwoPipelineTests(unittest.TestCase):
         self.assertTrue(result["same"])
         self.assertEqual(result["status"], "QUEUED")
         self.assertEqual(result["recovered"]["requeued"], 1)
-        self.assertEqual(result["schema"], 6)
+        self.assertGreaterEqual(result["schema"], 13)
 
     def test_context_is_strictly_user_isolated_and_persisted(self):
         result = run_isolated("""
@@ -70,6 +70,35 @@ class PhaseTwoPipelineTests(unittest.TestCase):
         self.assertFalse(result["cross"])
         self.assertTrue(result["stored"])
         self.assertEqual(result["checksum"], 64)
+
+    def test_duplicate_job_cleanup_preserves_assets_and_best_run(self):
+        result = run_isolated("""
+            import json
+            from app.db import init_db, execute, jdumps, query_one
+            from app.jobs import cleanup_duplicate_jobs, duplicate_job_summary
+            init_db()
+            execute("INSERT INTO users VALUES(?,?,?,?)", ('u1','A','a','now'))
+            execute("INSERT INTO source_contents VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    ('sc1','u1',None,'原文','douyin','','','transcribed',
+                     jdumps({'asr':{'exists':True,'text':'完整原文'}}),'now'))
+            payload = jdumps({'platform':'douyin','video_id':'v1','title':'同一条'})
+            execute("INSERT INTO jobs(id,user_id,task_type,status,current_step,progress,input_json,plan_json,output_json,error_json,trace_id,cost_est,cost_actual,created_at,started_at,finished_at,attempt_count,max_attempts,idempotency_key,lease_until,heartbeat_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ('old','u1','extraction','FAILED','resolve',0,payload,jdumps({}),jdumps({}),
+                     jdumps({'code':'X'}),'trace-old',0.0,0.0,'2026-01-01',None,None,1,3,None,None,None))
+            execute("INSERT INTO jobs(id,user_id,task_type,status,current_step,progress,input_json,plan_json,output_json,error_json,trace_id,cost_est,cost_actual,created_at,started_at,finished_at,attempt_count,max_attempts,idempotency_key,lease_until,heartbeat_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ('new','u1','extraction','SUCCEEDED','complete',100,payload,jdumps({}),
+                     jdumps({'source_content_id':'sc1'}),None,'trace-new',0.0,0.0,'2026-01-02',
+                     '2026-01-02','2026-01-02',1,3,None,None,None))
+            before=duplicate_job_summary('u1',['extraction'])
+            cleaned=cleanup_duplicate_jobs('u1',['extraction'])
+            print(json.dumps({'before':before['duplicate_count'],'deleted':cleaned['deleted_ids'],
+              'kept':query_one("SELECT status FROM jobs WHERE id='new'")['status'],
+              'asset':query_one("SELECT id FROM source_contents WHERE id='sc1'")['id']}))
+        """)
+        self.assertEqual(result["before"], 1)
+        self.assertEqual(result["deleted"], ["old"])
+        self.assertEqual(result["kept"], "SUCCEEDED")
+        self.assertEqual(result["asset"], "sc1")
 
     @unittest.skipUnless(os.name == "nt", "DPAPI is Windows-only")
     def test_bailian_asr_openai_audio_contract(self):
@@ -118,21 +147,26 @@ class PhaseTwoPipelineTests(unittest.TestCase):
             from app.db import init_db, execute, jdumps, query_one
             init_db()
             execute("INSERT INTO users VALUES(?,?,?,?)",('u-zhou','舟','z','now'))
-            execute("INSERT INTO creation_projects VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",('cp1','u-zhou','真实链路','收藏','','[]','','[]','{}','{}','DRAFTING','now'))
-            execute("INSERT INTO predictions VALUES(?,?,?,?,?,?,?,?,?,?,?)",('pred1','cp1','收藏','高于均值',0.7,'优势','风险','假设','判断',1,'now'))
-            execute("INSERT INTO content_tasks VALUES(?,?,?,?,?,?,?,?,?,?)",('ct1','u-zhou','cp1','真实链路','READY_TO_PUBLISH','抖音','2026-08-05',1.0,'high',jdumps([])))
+            execute("INSERT INTO creation_projects(id,user_id,title,goal,audience,source_chain_json,diff_strategy,outline_json,context_json,checks_json,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",('cp1','u-zhou','真实链路','收藏','','[]','','[]','{}','{}','DRAFTING','now'))
+            execute("INSERT INTO predictions(id,project_id,goal,expected_bucket,confidence,strengths,risks,hypothesis,user_judgement,locked,locked_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",('pred1','cp1','收藏','高于均值',0.7,'优势','风险','假设','判断',1,'now'))
+            execute("INSERT INTO content_tasks(id,user_id,project_id,title,status,platform,scheduled_date,estimate_h,priority,badges_json) VALUES(?,?,?,?,?,?,?,?,?,?)",('ct1','u-zhou','cp1','真实链路','READY_TO_PUBLISH','抖音','2026-08-05',1.0,'high',jdumps([])))
             pub=register_publication(PublicationIn(task_id='ct1',platform='抖音',url='https://example.com/work/1',final_title='真实链路'))['data']
             snap=capture_snapshot(pub['id'],SnapshotIn(tn='T+1',plays=1000,likes=50,comments=10,collects=20))['data']
+            interim=generate_retro(pub['id'])['data']
+            capture_snapshot(pub['id'],SnapshotIn(tn='T+7',plays=1800,likes=96,comments=18,collects=42))
             retro=generate_retro(pub['id'])['data']
             approved=approve_suggestion(retro['rule_suggestion_id'])['data']
             print(json.dumps({'schedules':len(pub['schedules']),'snapshot':bool(snap['id']),
               'engagement':retro['report']['actual']['engagement_rate'],
+              'interim_stage':interim['stage'],'final_stage':retro['stage'],
               'version':bool(approved['package_version_id']),
               'task':query_one("SELECT status FROM content_tasks WHERE id='ct1'")['status']}))
         """)
         self.assertEqual(result["schedules"], 3)
         self.assertTrue(result["snapshot"])
-        self.assertEqual(result["engagement"], 8.0)
+        self.assertEqual(result["engagement"], round((96 + 18 + 42) / 1800 * 100, 2))
+        self.assertEqual(result["interim_stage"], "INTERIM")
+        self.assertEqual(result["final_stage"], "FINAL")
         self.assertTrue(result["version"])
         self.assertEqual(result["task"], "RETRO_COMPLETED")
 

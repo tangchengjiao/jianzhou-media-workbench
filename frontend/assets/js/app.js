@@ -3,7 +3,7 @@
   const { createApp } = Vue;
 
   function initialCollapsedGroups() {
-    const defaults = { 基础: false, 洞察: false, 创作: false, 复盘: false };
+    const defaults = { 基础: false, 洞察: false, 创作: false, 运营: false, 复盘: false };
     try {
       const saved = JSON.parse(localStorage.getItem('jz-nav-collapsed') || '{}');
       Object.keys(defaults).forEach((key) => {
@@ -21,7 +21,9 @@
     extraction: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4.5-8 4.5-8-4.5L12 3z"/><path d="M4 12l8 4.5 8-4.5"/><path d="M4 16.5L12 21l8-4.5"/></svg>',
     analysis: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.2 7.2l7.3 3.6M8.2 16.8l7.3-3.6"/></svg>',
     creation: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l5 5L8 21H3v-5L14 5z"/><path d="M12 7l5 5"/></svg>',
+    visuals: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M4 17l5-5 3 3 3-4 5 6"/></svg>',
     plan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4M8 14h3M8 17h6"/></svg>',
+    channels: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M7 11l9-4M7 13l9 4"/></svg>',
     retro: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M4 19V5M4 19h16"/><path d="M8 15l3-4 3 2 4-6"/></svg>',
     growth: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 7-8"/><path d="M14 7h6v6"/></svg>',
     packages: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v10l-8 4-8-4V7l8-4z"/><path d="M4 7l8 4 8-4M12 11v10"/></svg>',
@@ -31,7 +33,7 @@
   const PAGE_COMPONENTS = {
     workbench: 'PageWorkbench', profile: 'PageProfile', account: 'PageAccount',
     radar: 'PageRadar', extraction: 'PageExtraction', analysis: 'PageAnalysis',
-    creation: 'PageCreation', plan: 'PagePlan', retro: 'PageRetro',
+    creation: 'PageCreation', visuals: 'PageVisualFactory', plan: 'PagePlan', channels: 'PageChannels', retro: 'PageRetro',
     growth: 'PageGrowth', packages: 'PagePackages', settings: 'PageSettings',
   };
 
@@ -51,6 +53,7 @@
       usage() { return store.usage; },
       avatarChar() { return store.avatarChar; },
       navGroups() { return store.navGroups; },
+      pageError() { return store.pageError; },
       currentPageComponent() { return PAGE_COMPONENTS[store.page] || 'PageWorkbench'; },
       dateLabel() {
         const d = new Date();
@@ -60,6 +63,7 @@
     },
     methods: {
       go(p) {
+        store.pageError = null;
         store.page = p;
         location.hash = '#/' + p;
         document.querySelector('.content') && (document.querySelector('.content').scrollTop = 0);
@@ -72,6 +76,17 @@
         store.theme = store.theme === 'light' ? 'dark' : 'light';
         applyTheme(store.theme);
         api.put('/api/settings', { section: 'appearance', values: { theme: store.theme } }).catch(() => {});
+      },
+      retryPage() {
+        const current = store.page;
+        store.pageError = null;
+        store.page = '__retry__';
+        this.$nextTick(() => { store.page = current; });
+      },
+      copyPageError() {
+        if (!store.pageError) return;
+        const text = JSON.stringify(store.pageError, null, 2);
+        if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast('页面诊断信息已复制'));
       },
     },
     async mounted() {
@@ -108,6 +123,11 @@
     },
   });
 
+  app.config.errorHandler = (error, instance, info) => {
+    console.error('Jianzhou page runtime error', error, info);
+    window.recordPageError(error, info);
+  };
+
   // 注册页面组件
   app.component('PageWorkbench', PageWorkbench);
   app.component('PageProfile', PageProfile);
@@ -116,7 +136,9 @@
   app.component('PageExtraction', PageExtraction);
   app.component('PageAnalysis', PageAnalysis);
   app.component('PageCreation', PageCreation);
+  app.component('PageVisualFactory', PageVisualFactory);
   app.component('PagePlan', PagePlan);
+  app.component('PageChannels', PageChannels);
   app.component('PageRetro', PageRetro);
   app.component('PageGrowth', PageGrowth);
   app.component('PagePackages', PagePackages);

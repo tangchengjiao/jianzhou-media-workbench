@@ -10,7 +10,7 @@ from .api import api_router
 from .db import init_db
 from .errors import register_error_handlers
 from .jobs import recover_interrupted_jobs, start_worker, stop_worker
-from .seed import seed_if_empty
+from .seed import ensure_data_scopes, seed_if_empty
 
 
 @asynccontextmanager
@@ -24,6 +24,9 @@ async def lifespan(app: FastAPI):
     recover_interrupted_jobs()
     with transaction():
         seed_if_empty()
+        ensure_data_scopes()
+    from .asset_center import sync_asset_index
+    sync_asset_index()
     start_worker()
     from . import scheduler
     scheduler.start()
@@ -137,7 +140,17 @@ def create_app() -> FastAPI:
         from .db import query_one
         version = query_one("PRAGMA user_version")
         return {"ok": True, "demo_mode": config.DEMO_MODE,
-                "schema_version": next(iter(version.values())) if version else 0}
+                "schema_version": next(iter(version.values())) if version else 0,
+                "build_profile": config.BUILD_PROFILE,
+                "build_id": config.BUILD_ID,
+                "capabilities": {
+                    "visual_factory": True,
+                    "unified_assets": True,
+                    "content_lifecycle": True,
+                    "advisor": True,
+                    "channel_operations": True,
+                    "wechat_official_drafts": True,
+                }}
 
     # 前端静态资源（免构建 Vue3）
     app.mount("/assets", StaticFiles(directory=config.FRONTEND_DIR / "assets"),

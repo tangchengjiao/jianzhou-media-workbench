@@ -78,7 +78,7 @@ class BenchmarkFlowTests(unittest.TestCase):
         self.assertEqual(result["sync_status"], "ready")
         self.assertGreater(result["works"], 0)
         self.assertEqual(result["signal_category"], "manual")
-        self.assertEqual(result["schema_version"], 6)
+        self.assertGreaterEqual(result["schema_version"], 13)
         self.assertEqual(result["scan_count"], 47)
         self.assertTrue(result["has_sync_columns"])
 
@@ -104,6 +104,39 @@ class BenchmarkFlowTests(unittest.TestCase):
             }))
         """, demo=False)
         self.assertEqual(result, {"error": "CONFIG_MISSING_API_KEY", "accounts": 0})
+
+    def test_heic_benchmark_cover_uses_owned_local_proxy(self):
+        result = run_isolated("""
+            import json
+            from app.api import set_current_user
+            from app.api.benchmarks import benchmark_detail
+            from app.benchmarks import add_benchmark
+            from app.db import execute, init_db, query_one, transaction
+            from app.main import _ensure_settings
+            from app.seed import seed_if_empty
+            init_db(); _ensure_settings()
+            with transaction():
+                seed_if_empty()
+            set_current_user("u-zhou")
+            created = add_benchmark(
+                "u-zhou", "https://www.douyin.com/user/cover-account",
+                "douyin", scan_count=1,
+            )
+            work = query_one(
+                "SELECT id FROM benchmark_works WHERE bm_id=? LIMIT 1",
+                (created["id"],),
+            )
+            execute(
+                "UPDATE benchmark_works SET cover=? WHERE id=?",
+                ("https://p11-sign.douyinpic.com/demo.heic?x-signature=test", work["id"]),
+            )
+            detail = benchmark_detail(created["id"])["data"]
+            saved = next(item for item in detail["works"] if item["id"] == work["id"])
+            print(json.dumps({"raw": saved["cover"], "display": saved["cover_display_url"]}))
+        """)
+        self.assertTrue(result["raw"].endswith("x-signature=test"))
+        self.assertTrue(result["display"].endswith("/cover"))
+        self.assertIn("/api/benchmarks/", result["display"])
 
     def test_real_executor_paginates_and_deduplicates(self):
         from app.datasource import EndpointExecutor

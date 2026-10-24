@@ -33,6 +33,12 @@ def run_isolated(source: str, *, demo: bool = True) -> dict:
 
 
 class InteractionClosureTests(unittest.TestCase):
+    def test_account_page_exposes_navigation_used_by_plan_button(self):
+        text = (ROOT / "frontend" / "assets" / "js" / "pages" / "base.js").read_text(encoding="utf-8")
+        account_component = text.split("window.PageAccount =", 1)[1]
+        self.assertIn("methods: {\n      go,", account_component)
+        self.assertIn("@click=\"go('plan')\"", account_component)
+
     def test_account_form_backend_persists_resolved_result_and_snapshot(self):
         result = run_isolated("""
             import json
@@ -112,6 +118,46 @@ class InteractionClosureTests(unittest.TestCase):
         self.assertEqual(result["cycle"], "验证真实交互闭环")
         self.assertEqual(result["comparison_count"], 1)
         self.assertEqual(result["comparison_bucket"], "high")
+
+    def test_multi_platform_generation_does_not_persist_partial_batch(self):
+        result = run_isolated("""
+            import json
+            from unittest.mock import patch
+            from app.api.creation import MultiDraftIn, generate_multi_platform_drafts
+            from app.db import execute, init_db, jdumps, query_one
+
+            init_db()
+            execute("INSERT INTO users(id,name,avatar,created_at) VALUES('u-zhou','user','','now')")
+            execute(
+                "INSERT INTO creation_projects(id,user_id,title,goal,audience,source_chain_json,"
+                "diff_strategy,outline_json,context_json,checks_json,status,created_at,"
+                "source_content_id,analysis_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ('cp-atomic','u-zhou','主题','目标','受众',jdumps([]),'方向',jdumps([]),
+                 jdumps({'context_run_id':'ctx-1','content':{}}),jdumps({}),'DRAFTING','now',None,None),
+            )
+
+            class Provider:
+                name = 'fake-real'
+                last_usage = {}
+                last_model = 'fake'
+                calls = 0
+                def generate_draft(self, *args, **kwargs):
+                    self.calls += 1
+                    if self.calls == 2:
+                        raise RuntimeError('provider timeout')
+                    return 'first draft'
+
+            failed = False
+            try:
+                with patch('app.api.creation.get_llm_provider', return_value=Provider()):
+                    generate_multi_platform_drafts(
+                        'cp-atomic', MultiDraftIn(platforms=['抖音口播','小红书图文']))
+            except RuntimeError:
+                failed = True
+            count = query_one("SELECT COUNT(*) c FROM draft_versions WHERE project_id='cp-atomic'")['c']
+            print(json.dumps({'failed': failed, 'draft_count': count}))
+        """)
+        self.assertEqual(result, {"failed": True, "draft_count": 0})
 
 
 if __name__ == "__main__":

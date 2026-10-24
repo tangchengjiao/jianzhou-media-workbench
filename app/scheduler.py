@@ -42,16 +42,25 @@ def save_config(cfg: dict) -> None:
 
 
 async def run_benchmark_patrol() -> dict:
-    from .benchmarks import scan_benchmark
-    rows = query("SELECT id FROM benchmark_accounts")
+    from . import config
+    from .jobs import create_job
+    scope = "demo" if config.DEMO_MODE else "real"
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    rows = query(
+        "SELECT b.id,b.user_id,b.name,b.monitor_frequency_hours FROM benchmark_accounts b "
+        "JOIN workspace_users u ON u.user_id=b.user_id WHERE u.data_scope=? AND b.monitor_enabled=1 "
+        "AND (b.next_run_at IS NULL OR b.next_run_at<=?)", (scope, now))
     results, errors = [], []
     for r in rows:
         try:
-            res = scan_benchmark(r["id"], emit_signals=True)
-            results.append({"bm_id": r["id"], **res})
+            job = create_job(r["user_id"], "benchmark_refresh", {
+                "title": f"定时刷新 · {r.get('name') or r['id']}",
+                "bm_id": r["id"], "count": 20, "trigger": "schedule",
+            })
+            results.append({"bm_id": r["id"], "job_id": job["id"]})
         except Exception as e:
             errors.append({"bm_id": r["id"], "error": str(e)})
-    return {"scanned": len(results), "failed": len(errors),
+    return {"enqueued": len(results), "failed": len(errors),
             "results": results, "errors": errors}
 
 
@@ -73,6 +82,29 @@ async def run_snapshot_due() -> dict:
             "note": "没有可验证的指标采集能力时，调度器不会生成演示快照。"}
 
 
+async def run_radar_sources_due() -> dict:
+    from . import config
+    from .jobs import create_job
+    scope = "demo" if config.DEMO_MODE else "real"
+    current = datetime.datetime.now().isoformat(timespec="seconds")
+    rows = query(
+        "SELECT r.id,r.user_id,r.name FROM radar_sources r "
+        "JOIN workspace_users u ON u.user_id=r.user_id WHERE u.data_scope=? AND r.enabled=1 "
+        "AND (r.next_run_at IS NULL OR r.next_run_at<=?)", (scope, current))
+    jobs = []
+    for row in rows:
+        job = create_job(row["user_id"], "radar_source_sync", {
+            "title": f"定时同步雷达源 · {row['name']}", "source_id": row["id"],
+            "trigger": "schedule",
+        })
+        jobs.append(job["id"])
+        # Prevent a one-minute enqueue storm while the worker is still running.
+        execute("UPDATE radar_sources SET next_run_at=? WHERE id=?",
+                ((datetime.datetime.now() + datetime.timedelta(minutes=10))
+                 .isoformat(timespec="seconds"), row["id"]))
+    return {"enqueued": len(jobs), "job_ids": jobs}
+
+
 async def run_task(task_name: str) -> dict:
     """手动或定时触发同一入口；互斥防并发。"""
     if _lock.locked():
@@ -80,6 +112,8 @@ async def run_task(task_name: str) -> dict:
     async with _lock:
         if task_name == "benchmark_patrol":
             result = await run_benchmark_patrol()
+        elif task_name == "radar_sources":
+            result = await run_radar_sources_due()
         elif task_name == "snapshot":
             result = await run_snapshot_due()
         else:
@@ -99,6 +133,7 @@ async def _tick() -> None:
     st = _schedule_state()
     if now_hm >= cfg["benchmark_patrol_time"] and st.get("benchmark_patrol_last") != _today():
         await run_task("benchmark_patrol")
+    await run_radar_sources_due()
     if now_hm >= cfg["snapshot_time"] and st.get("snapshot_last") != _today():
         await run_task("snapshot")
 

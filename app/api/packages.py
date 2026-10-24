@@ -34,10 +34,15 @@ def package_detail(pid: str):
 @router.get("/packages/{pid}/impact")
 def package_impact(pid: str):
     row = owned_row("data_packages", pid, current_user_id(), label="数据包")
+    items = query("SELECT id FROM corpus_items WHERE user_id=? AND perms_json LIKE ?",
+                  (current_user_id(), f'%"package_id":"{pid}"%'))
+    refs = query("SELECT id,task_type FROM context_runs WHERE user_id=? AND refs_json LIKE ? "
+                 "ORDER BY created_at DESC LIMIT 20",
+                 (current_user_id(), f'%{pid}%'))
     return ok({
         "package": row["name"],
-        "sources": row["source_count"],
-        "referenced_by": ["表达画像 v1.4", "创作项目 ×2"] if row["type"] == "corpus" else [],
+        "sources": len(items),
+        "referenced_by": [f"{item['task_type']} · {item['id']}" for item in refs],
         "affects_profile": row["type"] == "ip_profile",
         "affects_retro": row["type"] in ("account", "feedback"),
         "note": "删除前请确认：可仅删除缓存或删除原始资产。激活中的包需先切换。",
@@ -54,14 +59,28 @@ def activate_package(pid: str):
 
 @router.get("/packages/sources/tracking")
 def source_tracking():
-    return ok([
-        {"name": "咨询案例-汇报翻车", "source": "手动上传", "package": "内容语料包",
-         "analyzed": "✓", "refs": "创作项目 ×1（#C-31）", "impact": "影响草稿 v3", "level": "warn"},
-        {"name": "公众号文章合集 18 篇", "source": "ZIP 导入 #IMP-1980", "package": "内容语料包",
-         "analyzed": "✓", "refs": "表达画像 v1.4", "impact": "影响画像统计", "level": "warn"},
-        {"name": "对标样本-运营第6年", "source": "TikHub 同步", "package": "对标数据包",
-         "analyzed": "仅元数据", "refs": "信号 #SG-2031", "impact": "可安全删除", "level": "ok"},
-    ])
+    uid = current_user_id()
+    packages = {row["id"]: row for row in query(
+        "SELECT id,name FROM data_packages WHERE owner_id=?", (uid,)
+    )}
+    output = []
+    for item in query("SELECT * FROM corpus_items WHERE user_id=? ORDER BY rowid DESC", (uid,)):
+        permissions = jloads(item.get("perms_json"), {})
+        package = packages.get(permissions.get("package_id"), {})
+        refs = query(
+            "SELECT entity_type,entity_id FROM evidence_events WHERE user_id=? "
+            "AND refs_json LIKE ? ORDER BY created_at DESC LIMIT 3",
+            (uid, f'%{item["id"]}%'),
+        )
+        output.append({
+            "name": item["name"], "source": item.get("source") or "本地",
+            "package": package.get("name") or "未归入数据包",
+            "analyzed": "✓" if item.get("analyzed") else "未分析",
+            "refs": "、".join(f"{ref['entity_type']} #{ref['entity_id']}" for ref in refs) or "暂无引用",
+            "impact": "被引用" if refs else "当前未影响下游",
+            "level": "warn" if refs else "ok",
+        })
+    return ok(output)
 
 
 # ================= 外部导入 =================

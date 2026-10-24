@@ -1,0 +1,11 @@
+{
+  "label": "after",
+  "url": "http://127.0.0.1:8741/?radar=benchmarks&benchmark=bm-b07020b03a49469eb999278d9596c1c4#/radar",
+  "image_count": 31,
+  "loaded_count": 31,
+  "broken_count": 0,
+  "broken_images": [],
+  "console_errors": [],
+  "page_errors": [],
+  "screenshot": "D:\\见舟新媒体工作台项目\\docs\\audit\\benchmark-cover-repair-2026-08-09\\after.png"
+}

@@ -1,0 +1,145 @@
+{
+  "label": "before",
+  "url": "http://127.0.0.1:8741/?radar=benchmarks&benchmark=bm-b07020b03a49469eb999278d9596c1c4#/radar",
+  "image_count": 31,
+  "loaded_count": 12,
+  "broken_count": 19,
+  "broken_images": [
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/ocElvnPBA33BTA6MlajIcDBqILAcALIiAPCiq~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=3PTQFxolIHBQZgXm%2F9QwJVyUMx4%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：我是怎么学AI的？ 我把我学习AI的信息来源做成了一个Skill，免费送给你，学习AI，从可靠的来源获得一手的信息、高质量的信息，非常的重要。用了这个Skill，你也可以轻松做到。#ai学习路线 #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/oApev08IAo7lAgeQ1ELUADGGgU8GAJFyeg3B6C~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=4R0mb%2BcENMm2AQaRjkTxUwfXzmc%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：Vibe Coding从零开始，保姆级教程 从你写下第一行代码，到你获得了第一个用户，这中间究竟发生了些什么？你要需要做些什么？AI能在这中间帮你做些什么？一个视频给你讲清楚。#vibecoding #AI学习 #真实生活分享计划 #vibecoding大赏"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/oInBMAatA35W8Q4ohAiA0mvDEXABg2sIPPitx~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=VzAUtDJygfXnNKhurptsAsY2qoo%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：AI工作台保姆级教程 非常简单，一点都不复杂，3分钟就可以做得到。所有的提示词工程文件都是现成的，拿去用就行了。#AI工作台 #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/o49DdEvmAyAQFAeqAJeFEn2bIENfIA8ZvwDMA2~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=%2FZZspuaZNkDeQfAYg0jTB3QxpvY%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：如何痛苦的学习 AI 你但凡有一点不听话，AI 都能让你学会了#干货 #AI学习 #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/oUBva0AZHrBIPMqi2ABlki258AJmdiEaAtlAG~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=bw57ZqoNMHSrgUWbX%2BupLkmP2%2Fg%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：你先别学Obsidian 了 你需要首先搞清楚，你的个人知识库是给谁来用的？是给你来用的吗？错！我负责任的告诉你，知识库一定要设计成给 AI 来用的。搞不清楚这一点，你的知识库建了也是白建。#知识库 #Obsidian #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/o8DbAEnA6QPanFAA6oefDqwUBuAoC9wlQqIBAE~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=sekOLjfsyNP%2BJgCPUITDy2Qk3lE%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：蒸馏的保姆级教程 手把手教会你蒸馏一本书，以及如何蒸馏自己的一项技能。Skill 的含金量有多高，不用我赘述了。那么制作 Skill 的过程，我们就叫它蒸馏。蒸馏也不是多么神秘的事情，按照我的教程，你也可以掌握。#蒸馏 #AI学习 #费曼学习法 #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/ogDMAoD6QCSZVIE2vf9GAVwEC1figwPwArAAFq~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=njBqUQGD1%2FF5ojxT7mF80dZ2WfY%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：什么是 Skill？ 我认为在现在 AI 应用的阶段，普通人学习 AI 最应该先学好的就是 Skill，学好了 Skill，你很容易在自己的日常工作中大幅度提升效率。并且制作一个属于自己的 Skill 也并不是很难。我将使用费曼学习法和你一起分享我学到的 Skill。#skill #费曼学习法 #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/oUSeEILVAzQLpf0kJAGAIJyO7UUg0FBBAaI1eH~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=GJry12Ahvup0oZHx6T4J1eM2fEI%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：HTML 的含金量还在上升：PDF合并小工具 自己 Vibe  Coding 手搓 HTML 小工具实在是太好玩了，上次做了一个 PDF 拆图片的小工具，粉丝评论区留言说能不能做一个 PDF 合并的小工具。这他不就来了吗？办公软件的会员卡的含金量还在下降，而我大 HTML 的含金量依然在上升！#HTML #vibecoding #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/oYsaVBMmIAolKUAAyEWiOa1AvEBewAiM1jCh9f~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=flvLz6pBHP4BKHvEzgOaskBK3CM%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：AI只会让爱学习的人越学越快 AI 时代永远不会让学习消失，它只会让爱学习的人越学越好，越学越快。并且他会让人的能力分层，分层的原因是来源于思考的分层。但是由于学无止境。那在 AI 时代，我们一定要在干中学，新手朋友们要先尝试和 AI 一起去创造点什么东西。#AI学习 #费曼学习法 #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/osKEvqwSEE6gAFqDrAnIAwEFEhAYCoDuAQef9E~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=m8CcHTVjKqJ%2F%2BIBPuNdMQ2p%2BZ38%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：用AI做个人知识库一定要放本地！ 放本地有三个最大的好处，是在线版知识库完全比不了的。#AI #知识库 #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/oEF1EgPAix2iYBqAdwcEMSrAeWztBEAwAfPIhe~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=J%2FHFTJo1S3IqZlJ4FO2VP%2BQd8kw%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：1分钟让AI找到它能为你做点什么 很多粉丝到现在都还没有对 AI 说过一句话，不是他们不想用 AI，而是他们完全不知道 AI 能为他们做些什么。甚至有的粉丝明确知道 AI 很强大，但依然没有用，原因就是他们不知道 AI 能做什么，因此我设计了这个提示词，你只需要把这个提示词告诉 AI，那 AI 就可以采访你，然后通过采访，它会发现它能为你做些什么。#AI #ai使用技巧 #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/o0g7kQUAqMaievceGJQVEvLFZAAFrgeJIqBABS~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=ANsr4l1ZwD9Ox0PuiNfmlIHNyyM%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：AI 会让人变笨吗？AI 会让人产生依赖吗？ #真实生活分享计划 #AI  #费曼学习法 #AI学习"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/o0ATxApsAe2QI7eDLfACUIQG7ADgdAzK02eBB5~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=lI%2B%2BuuvwrWh4VxHqGEHYyIGmxN8%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：AI让我再也不需要续费wps会员了 5分钟手搓一个PDF拆成图片的HTML，超级好用！这种不真实的掌控感让我上瘾！并且我的wps年费会员瞬间就不香了！都跟我一起做HTML小工具吧哈哈哈#HTML #AI学习 #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/o0AJAx4yxxUg8FDAvFMXeQdfQue7QsXgAbqB8i~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=Utj2U2e7JWGL7zsGySQ4QByoCk0%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：我宣布进入HTML时代！ HTML在现在这个AI时代，感觉已经比MD更好用了。我几分钟就能手搓一个小工具，还能做更美观的演示页面，PPT都可以被HTML替代了。#HTML #AI #费曼学习法 #AI学习"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/oAbzwLBAAI1AiBMguofCekoIF3lEUaAoAiEgXE~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=FT6vVd2xZDlcYI8B01P%2F5zD2OLc%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：一个提示词就能把长视频转成逐字稿 实在太方便了！\n我长视频不爱看，深度长内容我更喜欢看文字，所以手搓了一个这个小工具。#workbuddy #AI #提示词 #真实生活分享计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/o8ovtECBTIMDAAqBxlALxAuiBlXoaACwi5rPa~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=8O%2Fpeho7PAB%2FaBbo7ZdSxFH%2FT14%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：【教程】新手上路第一站：建立个人知识库 AI时代对普通人来说最大的复利就是建立自己的知识库了。这件事在AI的帮助下极其的简单有效。\n我使用workbuddy教你三分钟建立个人知识库。从此以后你也算是吃上时代红利了。@抖音人文 #知识库 #workbuddy #askmeahardquestion #思想回声计划"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/oIoDKA9AEBvAIVFwqXdAXPjfy1f9CVAVWEEQnK~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=9GNTHkxk0dJwnbejkJYn8II2gc4%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：FDE是什么？7个问题带你详细了解 @抖音人文 大厂百万年薪在抢人的FDE究竟是个什么岗位？我通过费曼学习法，带你了解清楚。#FDE  #费曼学习法  #真实生活分享计划 #askmeahardquestion  #思想回声计划"
+    },
+    {
+      "src": "https://p26-sign.douyinpic.com/tos-cn-i-0813c000-ce/okAAAfUcBEB1iAHAqBiBIWEFICoIlu4w9WeOIA~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=dhR9M7llWPGZ%2BQdO5yBvr6gtxZQ%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_images&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：#费曼学习法 #无限进步"
+    },
+    {
+      "src": "https://p3-sign.douyinpic.com/tos-cn-i-0813c000-ce/oELdGekZBI0QQtQ04AUgLFP1Iq7UAAtaBJlAef~tplv-dy-resize-walign-adapt-aq:540:q75.heic?lk3s=138a59ce&x-expires=1787446800&x-signature=MmLgxXooXORyXmYIa6zQUP8k7OA%3D&from=327834062&s=PackSourceEnum_PUBLISH&se=false&sc=cover&biz_tag=aweme_video&l=20260809092837526A87F71347BA38FA05",
+      "complete": true,
+      "naturalWidth": 0,
+      "naturalHeight": 0,
+      "alt": "作品封面：第4集 | 什么是AI Agent 我使用费曼学习法。把什么是 AI Agent 给大家讲清楚。#真实生活分享计划 #AI #agent  #费曼学习法"
+    }
+  ],
+  "console_errors": [],
+  "page_errors": [],
+  "screenshot": "D:\\见舟新媒体工作台项目\\docs\\audit\\benchmark-cover-repair-2026-08-09\\before.png"
+}

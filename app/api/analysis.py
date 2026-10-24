@@ -1,4 +1,5 @@
 """内容拆解：拆解任务、拆解结果、内容模式卡。拆解 ≠ 仿写。"""
+import hashlib
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
@@ -20,10 +21,20 @@ def list_analysis():
                      (uid,))
     for a in analyses:
         a["result"] = jloads(a["result_json"], {})
-        sc = query_one("SELECT title,signal_id FROM source_contents WHERE id=?",
+        sc = query_one("SELECT title,signal_id,platform,status,assets_json FROM source_contents WHERE id=?",
                        (a["source_content_id"],))
         a["source_title"] = sc["title"] if sc else a["source_content_id"]
         a["signal_id"] = sc["signal_id"] if sc else None
+        a["source_platform"] = sc["platform"] if sc else ""
+        a["source_status"] = sc["status"] if sc else "missing"
+        if sc:
+            from .extraction import _resolved_text
+            source_text, source_text_kind = _resolved_text(jloads(sc.get("assets_json"), {}))
+            a["original_text_kind"] = source_text_kind
+            a["original_text_chars"] = len(source_text)
+        else:
+            a["original_text_kind"] = "来源不存在"
+            a["original_text_chars"] = 0
     pending = query(
         "SELECT id, title, status FROM source_contents"
         " WHERE user_id=? AND status='transcribed'"
@@ -36,6 +47,18 @@ def list_analysis():
 def analysis_detail(aid: str):
     row = owned_row("analyses", aid, current_user_id(), label="拆解")
     row["result"] = jloads(row["result_json"], {})
+    source = owned_row("source_contents", row["source_content_id"], current_user_id(),
+                       label="来源内容")
+    source_assets = jloads(source.get("assets_json"), {})
+    from .extraction import _resolved_text
+    source_text, source_text_kind = _resolved_text(source_assets)
+    row["source"] = {
+        "id": source["id"], "title": source["title"],
+        "platform": source["platform"], "author": source["author"],
+        "url": source["url"], "status": source["status"],
+        "text": source_text, "text_kind": source_text_kind,
+        "text_chars": len(source_text),
+    }
     return ok(row)
 
 
@@ -43,6 +66,7 @@ class AnalysisJobIn(BaseModel):
     source_content_id: str
     title: str
     source_chain: list[str] = []
+    force_reanalyze: bool = False
 
 
 @router.post("/plans")
@@ -69,11 +93,22 @@ def analysis_job(body: AnalysisJobIn):
     payload = body.model_dump()
     payload["title"] = source["title"]
     cost_est = 0.35 if config.DEMO_MODE else 0.0
+    assets = jloads(source.get("assets_json"), {})
+    transcript = next((str((assets.get(key) or {}).get("text") or "")
+                       for key in ("clean", "asr", "caption")
+                       if (assets.get(key) or {}).get("exists")
+                       and (assets.get(key) or {}).get("text")), "")
+    transcript_hash = hashlib.sha256(transcript.encode("utf-8")).hexdigest()[:16]
+    operation_key = f"analysis:{source['id']}:{transcript_hash}"
+    if body.force_reanalyze:
+        operation_key = f"{operation_key}:manual:{new_id('run')}"
     job = create_job(uid, "analysis", payload, cost_est=cost_est,
-                     idempotency_key=f"analysis:{source['id']}")
+                     idempotency_key=operation_key, reuse_succeeded=not body.force_reanalyze)
     note = ("拆解任务已排队 · 演示成本 ¥0.35" if config.DEMO_MODE
             else "拆解任务已排队 · Token 用量将写入台账，金额以 Provider 账单为准")
-    return ok({"job_id": job["id"], "note": note})
+    if job.get("reused"):
+        note = "相同正文已经拆解并沉淀，本次直接复用原任务；如需新版本请使用“重新拆解”。"
+    return ok({"job_id": job["id"], "reused": bool(job.get("reused")), "note": note})
 
 
 @router.get("/patterns")

@@ -1,0 +1,124 @@
+{
+  "mode": "read-only-current-workspace",
+  "steps": [
+    {
+      "step": 1,
+      "route": "workbench",
+      "text_length": 1023,
+      "loading_count": 0,
+      "empty_count": 0,
+      "button_count": 40,
+      "select_option_counts": []
+    },
+    {
+      "step": 2,
+      "route": "profile",
+      "text_length": 560,
+      "loading_count": 0,
+      "empty_count": 2,
+      "button_count": 51,
+      "select_option_counts": []
+    },
+    {
+      "step": 3,
+      "route": "account",
+      "text_length": 1684,
+      "loading_count": 0,
+      "empty_count": 0,
+      "button_count": 116,
+      "select_option_counts": [
+        6
+      ]
+    },
+    {
+      "step": 4,
+      "route": "radar",
+      "text_length": 15854,
+      "loading_count": 0,
+      "empty_count": 0,
+      "button_count": 360,
+      "select_option_counts": [],
+      "tab_count": 12,
+      "post_tab_console_severe": 0
+    },
+    {
+      "step": 5,
+      "route": "extraction",
+      "text_length": 1413,
+      "loading_count": 0,
+      "empty_count": 0,
+      "button_count": 43,
+      "select_option_counts": [],
+      "failed_job_buttons": 1,
+      "error_modal_open": true
+    },
+    {
+      "step": 6,
+      "route": "analysis",
+      "text_length": 1143,
+      "loading_count": 0,
+      "empty_count": 2,
+      "button_count": 42,
+      "select_option_counts": []
+    },
+    {
+      "step": 7,
+      "route": "creation",
+      "text_length": 455,
+      "loading_count": 1,
+      "empty_count": 0,
+      "button_count": 33,
+      "select_option_counts": [
+        0
+      ],
+      "creation_projects_select_options": 0,
+      "stuck_loading": true
+    },
+    {
+      "step": 8,
+      "route": "plan",
+      "text_length": 655,
+      "loading_count": 0,
+      "empty_count": 8,
+      "button_count": 35,
+      "select_option_counts": []
+    },
+    {
+      "step": 9,
+      "route": "retro",
+      "text_length": 508,
+      "loading_count": 0,
+      "empty_count": 1,
+      "button_count": 33,
+      "select_option_counts": []
+    },
+    {
+      "step": 10,
+      "route": "growth",
+      "text_length": 476,
+      "loading_count": 0,
+      "empty_count": 0,
+      "button_count": 40,
+      "select_option_counts": []
+    },
+    {
+      "step": 11,
+      "route": "packages",
+      "text_length": 855,
+      "loading_count": 0,
+      "empty_count": 2,
+      "button_count": 34,
+      "select_option_counts": []
+    },
+    {
+      "step": 12,
+      "route": "settings",
+      "text_length": 588,
+      "loading_count": 0,
+      "empty_count": 0,
+      "button_count": 42,
+      "select_option_counts": []
+    }
+  ],
+  "console_severe": []
+}

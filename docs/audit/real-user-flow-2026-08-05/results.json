@@ -1,0 +1,43 @@
+{
+  "mode": "current-real-user-flow",
+  "browser": "Chrome",
+  "passed": 7,
+  "failed": 0,
+  "results": [
+    {
+      "name": "真实工作区与导航折叠状态",
+      "status": "PASS",
+      "seconds": 3.2
+    },
+    {
+      "name": "真实账号结果与添加弹窗",
+      "status": "PASS",
+      "seconds": 2.64
+    },
+    {
+      "name": "雷达信号与对标添加入口",
+      "status": "PASS",
+      "seconds": 4.45
+    },
+    {
+      "name": "增量监控墙、竖版封面与作者分析",
+      "status": "PASS",
+      "seconds": 4.75
+    },
+    {
+      "name": "通用平台热点与可选行业数据源",
+      "status": "PASS",
+      "seconds": 2.55
+    },
+    {
+      "name": "可编辑 URL 与任务模型绑定",
+      "status": "PASS",
+      "seconds": 0.81
+    },
+    {
+      "name": "浏览器控制台无严重错误",
+      "status": "PASS",
+      "errors": []
+    }
+  ]
+}

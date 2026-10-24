@@ -1,6 +1,6 @@
 """数据源适配层：配置驱动 endpoint 映射执行器（借鉴参考项目 datasource.js）。
 
-能力：resolve_account / account_overview / account_videos / video_text /
+能力：resolve_account / account_overview / account_videos / video_text / video_media /
       video_comments / search_content
 接入或更换供应商只改设置中的 endpoints 映射，代码零改动。
 
@@ -208,14 +208,23 @@ class DemoDatasource:
             "fans": 80000 + h % 400000,
             "likes": 300000 + h % 2000000,
             "video_count": 120 + h % 300,
+            "availability": {"fans": True, "likes": True, "video_count": True},
         }
 
-    def account_videos(self, uid: str, platform: str, limit: int = 30) -> dict:
+    def account_videos(self, uid: str, platform: str, limit: int = 30,
+                       cursor: str | None = None) -> dict:
         h = self._rng(uid)
         base = time.time()
         works = []
         n = min(max(int(limit), 1), 500)
-        for i in range(n):
+        try:
+            offset = max(0, int(cursor or 0))
+        except (TypeError, ValueError):
+            offset = 0
+        available = 500
+        n = min(n, max(0, available - offset))
+        for idx in range(n):
+            i = offset + idx
             seed = h + i * 7919
             likes = 800 + seed % 90000
             comments = likes // (20 + seed % 30)
@@ -229,7 +238,9 @@ class DemoDatasource:
                 "likes": likes, "comments": comments, "collects": collects,
                 "shares": comments // 3, "duration": 60 + seed % 180,
             })
-        return {"works": works, "cursor": "", "has_more": False}
+        next_offset = offset + len(works)
+        return {"works": works, "cursor": str(next_offset),
+                "has_more": next_offset < available, "pages": max(1, (len(works) + 19) // 20)}
 
     def video_text(self, video_id: str, platform: str, title: str = "") -> dict:
         return {"text": f"【演示文案】《{title or video_id}》：为什么你的汇报总被打断？"
@@ -244,12 +255,28 @@ class DemoDatasource:
                               "likes": 2000 - i * 37} for i in range(min(limit, 20))],
                 "cost": 0.08}
 
-    def search_content(self, keyword: str) -> dict:
+    def search_content(self, keyword: str, platform: str = "douyin",
+                       limit: int = 20) -> dict:
         h = self._rng(keyword)
         return {"works": [{"video_id": f"kw{h%9999}_{i}",
                            "title": f"{keyword} 相关内容 {i+1}",
-                           "likes": 5000 + h % 20000} for i in range(6)],
+                           "url": "", "platform": platform,
+                           "likes": 5000 + h % 20000}
+                          for i in range(min(max(int(limit), 1), 6))],
                 "hot_trend": 30 + h % 60}
+
+    def work_share_url(self, video_id: str, platform: str) -> dict:
+        return {"url": canonical_platform_work_url(platform, video_id),
+                "cost": 0.0, "provider": self.name}
+
+    def platform_hot(self, platform: str, limit: int = 20) -> dict:
+        topics = ["AI 办公提效", "普通人如何建立个人品牌", "短视频选题方法",
+                  "职场表达", "内容创作工作流", "消费新趋势"]
+        return {"items": [
+            {"id": f"demo-{platform}-{i}", "title": title, "rank": i + 1,
+             "heat": 980000 - i * 73000, "url": "", "raw": {"demo": True}}
+            for i, title in enumerate(topics[:max(1, min(limit, len(topics)))])
+        ], "provider": self.name}
 
 
 # ================= 真实 HTTP 执行器（配置驱动） =================
@@ -312,6 +339,25 @@ class EndpointExecutor:
                            f"数据源未配置能力映射：{capability} / {platform}。"
                            "请在系统设置 → 数据源中补齐 endpoints。",
                            stage="endpoint_mapping", provider=self.name)
+        try:
+            result = self._call_endpoint_config(ep, args)
+        except AppError:
+            fallback = ep.get("fallback")
+            if not fallback:
+                raise
+            result = self._call_endpoint_config(fallback, args)
+        data = result.get("data")
+        empty_mapped_object = (
+            isinstance(data, dict)
+            and data
+            and all(value in (None, "", []) for value in data.values())
+        )
+        if ep.get("fallback") and (not data or empty_mapped_object):
+            result = self._call_endpoint_config(ep["fallback"], args)
+        return result
+
+    def _call_endpoint_config(self, ep: dict, args: dict) -> dict:
+        """Execute one concrete endpoint mapping; callers may provide a declared fallback."""
         self._throttle()
         url = self.pconf["baseUrl"].rstrip("/") + _subst(ep["path"], args)
         _validate_provider_url(url, resolve_dns=True)
@@ -356,6 +402,8 @@ class EndpointExecutor:
         except ValueError:
             raise AppError("PROVIDER_PARSE_ERROR", "数据接口返回内容无法解析（非 JSON）",
                            stage="provider_call", provider=self.name)
+        if ep.get("raw"):
+            return {"data": body.get("data", body), "request_id": body.get("request_id")}
         if ep.get("list"):
             arr = json_path_first(body, ep["list"])
             data = [map_obj(it, ep.get("map")) for it in arr] if isinstance(arr, list) else []
@@ -453,12 +501,19 @@ class EndpointExecutor:
         return {"uid": uid, "platform": platform, "name": _text_value(d.get("name")),
                 "avatar": _text_value(d.get("avatar")), "bio": _text_value(d.get("bio")),
                 "fans": _int_value(d.get("fans")), "likes": _int_value(d.get("likes")),
-                "video_count": _int_value(d.get("video_count"))}
+                "video_count": _int_value(d.get("video_count")),
+                "availability": {
+                    "fans": d.get("fans") not in (None, ""),
+                    "likes": d.get("likes") not in (None, ""),
+                    "video_count": d.get("video_count") not in (None, ""),
+                }}
 
-    def account_videos(self, uid: str, platform: str, limit: int = 30) -> dict:
+    def account_videos(self, uid: str, platform: str, limit: int = 30,
+                       cursor: str | None = None) -> dict:
         target = min(max(int(limit), 1), 500)
         endpoint = self._pick_ep("accountVideos", platform) or {}
-        cursor = str(endpoint.get("startCursor", "0" if platform == "douyin" else ""))
+        cursor = str(cursor if cursor is not None else
+                     endpoint.get("startCursor", "0" if platform == "douyin" else ""))
         page_size = max(1, int(endpoint.get("pageSize", 20)))
         max_pages = min(50, max(2, (target + page_size - 1) // page_size + 1))
         raw_works: list[dict] = []
@@ -496,14 +551,19 @@ class EndpointExecutor:
                 break
             cursor = str(next_cursor)
         works = [{"video_id": _text_value(w.get("video_id")),
-                  "title": _text_value(w.get("title")), "cover": _text_value(w.get("cover")),
+                  "title": _text_value(w.get("title")),
+                  "cover": _text_value(w.get("cover")) + _text_value(w.get("cover_token")),
                   "url": _text_value(w.get("url")), "create_time": _int_value(w.get("create_time")),
                   "plays": _int_value(w.get("plays")), "likes": _int_value(w.get("likes")),
                   "comments": _int_value(w.get("comments")), "collects": _int_value(w.get("collects")),
                   "shares": _int_value(w.get("shares")), "duration": _int_value(w.get("duration"))}
                  for w in raw_works[:target]]
+        works.sort(key=lambda item: (int(item.get("create_time") or 0),
+                                     str(item.get("video_id") or "")), reverse=True)
         return {"works": works, "cursor": cursor, "has_more": has_more,
-                "pages": pages}
+                "pages": pages,
+                "newest_create_time": max((int(item.get("create_time") or 0)
+                                            for item in works), default=0)}
 
     def video_text(self, video_id: str, platform: str, title: str = "") -> dict:
         r = self.call_endpoint("videoText", {"videoId": video_id, "platform": platform})
@@ -515,10 +575,301 @@ class EndpointExecutor:
                            details={"video_id": video_id})
         return {"text": text, "cost": 0.10}
 
+    def video_media(self, video_id: str, platform: str) -> dict:
+        """Resolve and download original public media after explicit user approval."""
+        args = {"videoId": video_id, "platform": platform}
+        ep = self._pick_ep("videoMedia", platform)
+        resolved = self.call_endpoint("videoMedia", args).get("data") or {}
+        candidates = []
+
+        def add_candidate(payload: dict) -> None:
+            url = _text_value((payload or {}).get("url"))
+            if url and url not in candidates:
+                candidates.append(url)
+
+        add_candidate(resolved)
+        if not candidates:
+            raise AppError(
+                "MEDIA_URL_NOT_AVAILABLE", "平台未返回可下载的公开媒体地址。",
+                stage="resolve_media", provider=self.name,
+                details={"video_id": video_id, "platform": platform},
+            )
+        limit = 100 * 1024 * 1024
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0.0.0 Safari/537.36"
+            ),
+            "Referer": "https://www.douyin.com/",
+            "Accept": "video/avc,video/mp4,video/*;q=0.9,*/*;q=0.8",
+            "Range": "bytes=0-",
+        }
+
+        def download(url: str) -> tuple[bytes, str]:
+            _validate_media_url(url, resolve_dns=True)
+            with httpx.Client(timeout=90.0, follow_redirects=False) as client:
+                current_url = url
+                for _ in range(6):
+                    _validate_media_url(current_url, resolve_dns=True)
+                    request = client.build_request("GET", current_url, headers=headers)
+                    response = client.send(request, stream=True)
+                    if 300 <= response.status_code < 400 and response.headers.get("location"):
+                        current_url = urllib.parse.urljoin(current_url, response.headers["location"])
+                        response.close()
+                        continue
+                    break
+                else:
+                    raise AppError(
+                        "MEDIA_REDIRECT_LOOP", "公开媒体下载重定向次数过多。",
+                        stage="download_media", provider=self.name,
+                    )
+                try:
+                    if response.status_code not in (200, 206):
+                        raise AppError(
+                            "MEDIA_DOWNLOAD_FAILED",
+                            f"公开媒体下载失败（HTTP {response.status_code}）。",
+                            stage="download_media", provider=self.name,
+                            retryable=response.status_code in (403, 408, 425, 429)
+                            or response.status_code >= 500,
+                            details={"http_status": response.status_code,
+                                     "cdn_host": urllib.parse.urlparse(current_url).hostname or ""},
+                        )
+                    content_length = int(response.headers.get("content-length") or 0)
+                    if content_length > limit:
+                        raise AppError(
+                            "MEDIA_TOO_LARGE", "公开媒体超过 100 MB，已停止下载。",
+                            stage="download_media", provider=self.name,
+                            details={"limit_bytes": limit, "content_length": content_length},
+                        )
+                    chunks = bytearray()
+                    for chunk in response.iter_bytes():
+                        chunks.extend(chunk)
+                        if len(chunks) > limit:
+                            raise AppError(
+                                "MEDIA_TOO_LARGE", "公开媒体超过 100 MB，已停止下载。",
+                                stage="download_media", provider=self.name,
+                                details={"limit_bytes": limit},
+                            )
+                    mime = response.headers.get("content-type", "video/mp4").split(";", 1)[0]
+                finally:
+                    response.close()
+            return bytes(chunks), mime
+
+        last_error = None
+        attempted_fallback = False
+        while candidates:
+            media_url = candidates.pop(0)
+            try:
+                media_bytes, mime = download(media_url)
+                return {"bytes": media_bytes, "mime_type": mime or "video/mp4",
+                        "url": media_url, "cost": 0.005}
+            except AppError as exc:
+                last_error = exc
+                fallback = (ep or {}).get("fallback")
+                if fallback and not attempted_fallback:
+                    attempted_fallback = True
+                    fallback_data = self._call_endpoint_config(fallback, args).get("data") or {}
+                    add_candidate(fallback_data)
+                continue
+            except httpx.HTTPError as exc:
+                last_error = AppError(
+                    "MEDIA_DOWNLOAD_FAILED", f"公开媒体下载失败：{exc.__class__.__name__}。",
+                    stage="download_media", provider=self.name, retryable=True,
+                )
+                continue
+        if last_error:
+            raise last_error
+        raise AppError(
+            "MEDIA_URL_NOT_AVAILABLE", "平台未返回可下载的公开媒体地址。",
+            stage="resolve_media", provider=self.name,
+            details={"video_id": video_id, "platform": platform},
+        )
+
     def video_comments(self, video_id: str, platform: str, limit: int = 200) -> dict:
         r = self.call_endpoint("videoComments", {"videoId": video_id,
                                                  "platform": platform, "limit": limit})
         return {"comments": r["data"], "cost": 0.08}
+
+    def work_share_url(self, video_id: str, platform: str) -> dict:
+        """Resolve a share URL only after an explicit user action."""
+        direct = canonical_platform_work_url(platform, video_id)
+        if direct:
+            return {"url": direct, "cost": 0.0, "provider": self.name}
+        result = self.call_endpoint(
+            "workShareUrl", {"videoId": video_id, "platform": platform}
+        ).get("data") or {}
+        url = _text_value(result.get("url"))
+        if not url.startswith("https://"):
+            raise AppError(
+                "SHARE_URL_NOT_AVAILABLE", "平台没有返回可公开访问的作品链接。",
+                stage="work_share_url", provider=self.name, retryable=True,
+                details={"platform": platform, "video_id": video_id},
+            )
+        return {"url": url, "cost": 0.01 if platform == "channels" else 0.0,
+                "provider": self.name}
+
+    def search_content(self, keyword: str, platform: str = "douyin",
+                       limit: int = 20) -> dict:
+        """Search a configured platform without manufacturing missing fields."""
+        if platform not in {"douyin", "xhs", "tiktok"}:
+            raise AppError(
+                "KEYWORD_PLATFORM_UNSUPPORTED",
+                f"{PLATFORM_LABELS.get(platform, platform)} 尚未配置关键词搜索接口。",
+                stage="keyword_search", provider=self.name, retryable=False,
+            )
+        raw = self.call_endpoint("searchContent", {
+            "platform": platform, "keyword": keyword,
+            "limit": max(1, min(int(limit), 50)),
+        }).get("data")
+        candidates = _best_topic_list(raw)
+        works = []
+        for candidate in candidates:
+            normalized = _normalize_search_item(candidate, platform)
+            if normalized["title"]:
+                works.append(normalized)
+            if len(works) >= max(1, min(int(limit), 50)):
+                break
+        if not works:
+            raise AppError(
+                "PROVIDER_EMPTY_RESULT",
+                "关键词接口已返回，但没有识别到作品；请检查关键词或更新平台字段映射。",
+                stage="keyword_search", provider=self.name, retryable=True,
+            )
+        return {"works": works, "provider": self.name}
+
+    def platform_hot(self, platform: str, limit: int = 20) -> dict:
+        """Fetch and normalize a platform hot board without fabricating fields."""
+        if platform not in {"douyin", "xhs", "bilibili", "kuaishou", "weibo", "zhihu"}:
+            raise AppError("PLATFORM_UNSUPPORTED", f"该平台尚未配置热点榜：{platform}",
+                           stage="platform_hot", provider=self.name)
+        raw = self.call_endpoint("platformHot", {
+            "platform": platform, "limit": max(1, min(int(limit), 50))
+        }).get("data")
+        candidates = _best_topic_list(raw)
+        items = []
+        for idx, item in enumerate(candidates[:max(1, min(int(limit), 50))]):
+            normalized = _normalize_hot_item(item, platform, idx + 1)
+            if normalized["title"]:
+                items.append(normalized)
+        if not items:
+            raise AppError("PROVIDER_EMPTY_RESULT",
+                           f"{platform} 热点接口返回了数据，但未识别到热搜条目；请更新字段映射。",
+                           stage="platform_hot", provider=self.name, retryable=True)
+        return {"items": items, "provider": self.name}
+
+
+def _best_topic_list(value) -> list:
+    """Find the most topic-like list inside provider-specific nested JSON."""
+    lists: list[list] = []
+    def walk(node):
+        if isinstance(node, list):
+            if node and any(isinstance(x, (dict, str)) for x in node):
+                lists.append(node)
+            for child in node[:100]:
+                walk(child)
+        elif isinstance(node, dict):
+            for child in node.values():
+                walk(child)
+    walk(value)
+    title_keys = {"word", "sentence", "keyword", "query", "title", "name",
+                  "desc", "show_name", "hot_word", "note"}
+    def score(items):
+        total = 0
+        for item in items[:50]:
+            if isinstance(item, str) and item.strip():
+                total += 2
+            elif isinstance(item, dict):
+                total += sum(1 for key in title_keys if item.get(key) not in (None, "")) * 3
+                total += 1
+        return total
+    return max(lists, key=score, default=[])
+
+
+def _normalize_hot_item(item, platform: str, rank: int) -> dict:
+    if isinstance(item, str):
+        item = {"title": item}
+    if not isinstance(item, dict):
+        item = {}
+    def first(keys, default=""):
+        for key in keys:
+            value = item.get(key)
+            if value not in (None, "", []):
+                return value
+        return default
+    title = _text_value(first(("word", "sentence", "keyword", "query", "title",
+                               "name", "desc", "show_name", "hot_word", "note")))
+    heat = _int_value(first(("hot_value", "hot_score", "score", "heat",
+                             "view_count", "popularity", "hotness"), 0))
+    actual_rank = _int_value(first(("rank", "position", "index"), rank)) or rank
+    url = _text_value(first(("url", "share_url", "link", "jump_url", "schema")))
+    if not url and title:
+        encoded = urllib.parse.quote(title)
+        url = {
+            "douyin": f"https://www.douyin.com/search/{encoded}",
+            "xhs": f"https://www.xiaohongshu.com/search_result?keyword={encoded}",
+            "bilibili": f"https://search.bilibili.com/all?keyword={encoded}",
+            "kuaishou": f"https://www.kuaishou.com/search/video?searchKey={encoded}",
+            "weibo": f"https://s.weibo.com/weibo?q={encoded}",
+            "zhihu": f"https://www.zhihu.com/search?q={encoded}",
+        }.get(platform, "")
+    stable = hashlib.sha256(f"{platform}\0{title}".encode("utf-8")).hexdigest()[:20]
+    return {"id": stable, "title": title, "rank": actual_rank, "heat": heat,
+            "url": url, "raw": item}
+
+
+def canonical_platform_work_url(platform: str, video_id: str) -> str:
+    if not video_id:
+        return ""
+    return {
+        "douyin": f"https://www.douyin.com/video/{video_id}",
+        "xhs": f"https://www.xiaohongshu.com/explore/{video_id}",
+        "bilibili": f"https://www.bilibili.com/video/{video_id}",
+        "kuaishou": f"https://www.kuaishou.com/short-video/{video_id}",
+    }.get(platform, "")
+
+
+def _deep_first(value, keys: tuple[str, ...]):
+    if isinstance(value, dict):
+        for key in keys:
+            candidate = value.get(key)
+            if candidate not in (None, "", []):
+                return candidate
+        for child in value.values():
+            candidate = _deep_first(child, keys)
+            if candidate not in (None, "", []):
+                return candidate
+    elif isinstance(value, list):
+        for child in value[:20]:
+            candidate = _deep_first(child, keys)
+            if candidate not in (None, "", []):
+                return candidate
+    return None
+
+
+def _normalize_search_item(item, platform: str) -> dict:
+    if not isinstance(item, dict):
+        return {"video_id": "", "title": _text_value(item), "cover": "", "url": "",
+                "platform": platform, "plays": 0, "likes": 0, "comments": 0,
+                "collects": 0, "shares": 0, "create_time": 0}
+    video_id = _text_value(_deep_first(item, (
+        "aweme_id", "note_id", "noteId", "video_id", "object_id", "id")))
+    title = _text_value(_deep_first(item, (
+        "desc", "title", "display_title", "note_title", "content")))
+    cover = _text_value(_deep_first(item, (
+        "cover", "cover_url", "coverUrl", "image", "image_url", "thumbnail")))
+    url = _text_value(_deep_first(item, ("share_url", "url", "note_url", "web_url")))
+    return {
+        "video_id": video_id, "title": title, "cover": cover,
+        "url": url or canonical_platform_work_url(platform, video_id),
+        "platform": platform,
+        "plays": _int_value(_deep_first(item, ("play_count", "view_count", "views"))),
+        "likes": _int_value(_deep_first(item, ("digg_count", "like_count", "likes"))),
+        "comments": _int_value(_deep_first(item, ("comment_count", "comments"))),
+        "collects": _int_value(_deep_first(item, ("collect_count", "collected_count", "collects"))),
+        "shares": _int_value(_deep_first(item, ("share_count", "shares"))),
+        "create_time": _int_value(_deep_first(item, ("create_time", "time", "published_at"))),
+    }
 
 
 def _subst(s: str, args: dict) -> str:
@@ -634,6 +985,36 @@ def _validate_provider_url(url: str, resolve_dns: bool = False) -> None:
             raise AppError("PROVIDER_NETWORK_ERROR", "数据源域名无法解析。",
                            stage="provider_call", retryable=True,
                            details={"reason": exc.__class__.__name__})
+        for address in addresses:
+            _validate_ip(address)
+
+
+def _validate_media_url(url: str, resolve_dns: bool = False) -> None:
+    """Allow only known public ByteDance/Douyin media CDNs returned by TikHub."""
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    allowed_suffixes = (
+        "zjcdn.com", "douyinvod.com", "douyinpic.com", "byteimg.com",
+        "bytedance.com", "snssdk.com", "amemv.com",
+    )
+    if (parsed.scheme != "https" or not host or parsed.username or parsed.password
+            or not any(host == suffix or host.endswith("." + suffix)
+                       for suffix in allowed_suffixes)):
+        raise AppError(
+            "MEDIA_URL_BLOCKED", "公开媒体地址不属于受信任的平台 CDN，已停止下载。",
+            stage="resolve_media", details={"host": host},
+        )
+    if resolve_dns:
+        try:
+            addresses = {item[4][0] for item in socket.getaddrinfo(
+                host, 443, type=socket.SOCK_STREAM
+            )}
+        except socket.gaierror as exc:
+            raise AppError(
+                "MEDIA_DOWNLOAD_FAILED", "公开媒体域名无法解析。",
+                stage="download_media", retryable=True,
+                details={"reason": exc.__class__.__name__},
+            )
         for address in addresses:
             _validate_ip(address)
 

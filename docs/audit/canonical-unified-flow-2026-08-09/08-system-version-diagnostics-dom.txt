@@ -1,0 +1,150 @@
+舟
+见舟工作台
+本地优先 · v2.1
+工作总台
+基础
+▾
+IP档案
+账号运营
+洞察
+▾
+内容雷达
+内容提取
+内容拆解
+创作
+▾
+创作工坊
+视觉工厂
+内容计划
+复盘
+▾
+数据复盘
+成长记录
+资料中心
+系统设置
+本地模式 · 数据保存在本机
+系统设置
+● 真实 Provider
+今日成本
+¥0.00
+/ ¥20
+8月9日 周日
+☾
+舟
+系统设置
+配置数据源、模型、成本、安全和诊断。
+运行模式
+数据来源
+大模型
+图片模型
+语音模型
+成本控制
+本地数据
+系统诊断 20
+当前版本与数据源
+先确认这里，再判断页面能力和历史数据是否属于同一版本。
+Schema 23
+运行类型
+source · workspace-schema23-visual-assets-lifecycle
+数据目录
+D:\见舟新媒体工作台项目\data
+源码/资源目录
+D:\见舟新媒体工作台项目
+视觉工厂 已包含
+统一资料中心 已包含
+创作生命周期 已包含
+运营顾问 已包含
+当前运行版本
+source · workspace-schema23-visual-assets-lifecycle · Schema 23
+核心能力清单
+视觉工厂 · 统一资料中心 · 创作生命周期 · 运营顾问
+TikHub API 连通性
+已配置 Key
+LLM 配置
+配置完整 · 请手动测试连接
+阿里云百炼 ASR
+qwen3-asr-flash · 请手动测试音频
+图片模型配置
+gpt-image-2 · 请手动生成测试
+FFmpeg
+E:\software\ffmpeg\bin\ffmpeg.EXE
+本地存储权限
+可写 · 剩余 30 GB · D:\见舟新媒体工作台项目\data
+SQLite 完整性与外键
+quick_check=ok · foreign_keys=on
+最近错误与任务日志
+查询
+时间	错误码	阶段	Provider	Trace ID
+08-07 15:03	PROVIDER_NETWORK_ERROR	provider_call		tr_20260807_ff…
+08-07 15:03	PROVIDER_NETWORK_ERROR	provider_call		tr_20260807_a4…
+08-06 19:15	LLM_OUTPUT_INVALID	schema_validate	openai_compatible	tr_20260806_10…
+08-06 15:19	NOT_FOUND	lookup		tr_20260806_92…
+08-06 15:12	IMAGE_PROVIDER_ERROR	image_generate	openai_compatible_image	tr_20260806_ae…
+08-06 14:53	IMAGE_PROVIDER_ERROR	image_generate	openai_compatible_image	tr_20260806_ea…
+08-06 14:53	IMAGE_PROVIDER_ERROR	image_generate	openai_compatible_image	tr_20260806_99…
+08-06 14:52	VALIDATION_FAILED	schema_validation		tr_20260806_8a…
+08-06 14:52	VALIDATION_FAILED	schema_validation		tr_20260806_2a…
+08-06 14:20	PREDICTION_ALREADY_LOCKED	prediction_lock		tr_20260806_f0…
+08-06 14:09	IMAGE_CONFIG_INCOMPLETE	image_config	openai_compatible_image	tr_20260806_9b…
+08-06 12:08	CONTENT_STATE_INVALID	state_machine		tr_20260806_c5…
+08-06 11:56	LLM_EMPTY_RESPONSE	llm_parse	openai_compatible	tr_20260806_02…
+08-06 09:29	LLM_OUTPUT_INVALID	schema_validate	openai_compatible	tr_20260806_f3…
+08-06 00:38	LLM_OUTPUT_INVALID	schema_validate	openai_compatible	tr_20260806_ac…
+08-06 00:13	LLM_OUTPUT_INVALID	schema_validate	openai_compatible	tr_20260806_06…
+08-06 00:12	LLM_OUTPUT_INVALID	schema_validate	openai_compatible	tr_20260806_ce…
+08-06 00:12	LLM_OUTPUT_INVALID	schema_validate	openai_compatible	tr_20260806_5a…
+08-05 22:59	STT_PROVIDER_ERROR	transcribe	aliyun_bailian_asr	tr_20260805_7b…
+08-05 22:58	LLM_OUTPUT_INVALID	schema_validate	openai_compatible	tr_20260805_67…
+Usage Ledger
+每次外部调用均记录（含失败是否收费）
+时间	任务	Provider	接口	费用
+08-06 20:09	视觉工厂 · 个人知识库必须放本地？我的工作流里，本地和在线怎么配才真提效	openai_compatible_image	images/generations	¥0.01
+08-06 19:59	发布前预测 · 个人知识库必须放本地？我的工作流里，本地和在线怎么配才真提效	openai_compatible	creation_prediction	¥0.00
+08-06 19:18	抖音口播初稿 · 个人知识库必须放本地？我的工作流里，本地和在线怎么配才真提效 · structure	openai_compatible	creation_draft	¥0.00
+08-06 19:18	创作提纲 · 个人知识库必须放本地？我的工作流里，本地和在线怎么配才真提效	openai_compatible	creation_outline	¥0.00
+08-06 19:16	差异化方向 · 个人知识库必须放本地？我的工作流里，本地和在线怎么配才真提效	openai_compatible	creation_directions	¥0.00
+08-06 15:21	视觉工厂 · AI Skill 是什么、构成与工作原理	openai_compatible_image	images/generations	¥0.01
+08-06 15:17	视觉工厂 · AI Skill 是什么、构成与工作原理	openai_compatible_image	images/generations	¥0.01
+08-06 15:15	图片模型连通测试	openai_compatible_image	images/generations	¥0.00
+08-06 14:19	发布前预测 · AI Skill 是什么、构成与工作原理	openai_compatible	creation_prediction	¥0.00
+08-06 14:07	????初稿 · AI Skill 是什么、构成与工作原理 · light	openai_compatible	creation_draft	¥0.00
+08-06 14:04	????初稿 · AI Skill 是什么、构成与工作原理 · structure	openai_compatible	creation_draft	¥0.00
+08-06 12:09	抖音口播初稿 · AI Skill 是什么、构成与工作原理	openai_compatible	creation_draft	¥0.00
+08-06 09:30	抖音口播初稿 · AI Skill 是什么、构成与工作原理	openai_compatible	creation_draft	¥0.00
+08-06 09:29	差异化方向 · AI Skill 是什么、构成与工作原理	openai_compatible	creation_directions	¥0.00
+08-06 00:38	差异化方向 · 蒸馏（制作Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-06 00:12	差异化方向 · 蒸馏（制作Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:56	差异化方向 · 蒸馏（制作Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:56	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:48	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:48	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:43	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:43	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:41	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:40	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:30	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:30	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:27	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:27	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:24	内容拆解 · 什么是 Skill？ 我认为在现在 AI 应用的阶段，普通人学习 AI 最应该先学好的就是 Skill，学好了 Skill，你很容易在自己的日常工作中大幅度提升效率。并且制作一个属于自己的 Skill 也并不是很难。我将使用费曼学习法和你一起分享我学到的 Skill。#skill #费曼学习法 #真实生活分享计划	openai_compatible	analysis	¥0.00
+08-05 23:23	ASR 转写 · 什么是 Skill？ 我认为在现在 AI 应用的阶段，普通人学习 AI 最应该先学好的就是 Skill，学好了 Skill，你很容易在自己的日常工作中大幅度提升效率。并且制作一个属于自己的 Skill 也并不是很难。我将使用费曼学习法和你一起分享我学到的 Skill。#skill #费曼学习法 #真实生活分享计划	aliyun_bailian_asr	asr	¥0.00
+08-05 23:22	公开媒体解析 · 什么是 Skill？ 我认为在现在 AI 应用的阶段，普通人学习 AI 最应该先学好的就是 Skill，学好了 Skill，你很容易在自己的日常工作中大幅度提升效率。并且制作一个属于自己的 Skill 也并不是很难。我将使用费曼学习法和你一起分享我学到的 Skill。#skill #费曼学习法 #真实生活分享计划	real_tikhub	media	¥0.01
+08-05 23:09	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 23:01	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 22:59	公开媒体解析 · 什么是 Skill？ 我认为在现在 AI 应用的阶段，普通人学习 AI 最应该先学好的就是 Skill，学好了 Skill，你很容易在自己的日常工作中大幅度提升效率。并且制作一个属于自己的 Skill 也并不是很难。我将使用费曼学习法和你一起分享我学到的 Skill。#skill #费曼学习法 #真实生活分享计划	real_tikhub	media	¥0.01
+08-05 22:59	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 22:58	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 22:57	ASR 转写 · 蒸馏的保姆级教程 手把手教会你蒸馏一本书，以及如何蒸馏自己的一项技能。Skill 的含金量有多高，不用我赘述了。那么制作 Skill 的过程，我们就叫它蒸馏。蒸馏也不是多么神秘的事情，按照我的教程，你也可以掌握。#蒸馏 #AI学习 #费曼学习法 #真实生活分享计划	aliyun_bailian_asr	asr	¥0.00
+08-05 22:56	公开媒体解析 · 蒸馏的保姆级教程 手把手教会你蒸馏一本书，以及如何蒸馏自己的一项技能。Skill 的含金量有多高，不用我赘述了。那么制作 Skill 的过程，我们就叫它蒸馏。蒸馏也不是多么神秘的事情，按照我的教程，你也可以掌握。#蒸馏 #AI学习 #费曼学习法 #真实生活分享计划	real_tikhub	media	¥0.01
+08-05 22:36	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 22:36	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 22:36	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 22:35	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 22:35	创作提纲 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_outline	¥0.00
+08-05 22:35	创作提纲 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_outline	¥0.00
+08-05 22:35	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 22:35	创作提纲 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_outline	¥0.00
+08-05 22:35	创作提纲 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_outline	¥0.00
+08-05 22:35	创作提纲 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_outline	¥0.00
+08-05 22:07	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00
+08-05 21:38	差异化方向 · 蒸馏（制作 Skill）的保姆级教程	openai_compatible	creation_directions	¥0.00

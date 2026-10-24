@@ -72,6 +72,10 @@
         toast('Trace ID 已复制');
       },
       goSettings() { this.close(); app() && app().go('settings'); },
+      needsSettings() {
+        if (!this.err) return false;
+        return this.err.stage === 'provider_config' || /CONFIG|UNAUTHORIZED|API_KEY/.test(this.err.code || '');
+      },
     },
     template: `
     <div class="modal" :class="{open}" @click.self="close">
@@ -92,7 +96,8 @@
         </div>
         <div class="modal-foot">
           <button class="btn" @click="close">关闭</button>
-          <button class="btn btn-pri" @click="goSettings">去修复配置</button>
+          <button class="btn btn-pri" v-if="needsSettings()" @click="goSettings">去修复配置</button>
+          <button class="btn btn-pri" v-else @click="close">返回任务处理</button>
         </div>
       </div>
     </div>`,
@@ -202,11 +207,19 @@
 
   /* ---------- 发布登记 ---------- */
   window.PublishModal = {
-    data() { return { open: false, task: null, form: { platform: '抖音', url: '', final_title: '', note: '' }, busy: false }; },
+    data() { return { open: false, mode: 'planned', task: null, form: { platform: '抖音', url: '', final_title: '', published_at: '', note: '' }, busy: false }; },
     created() {
       bus.on('open-publish', (task) => {
+        this.mode = 'planned';
         this.task = task;
-        this.form = { platform: task.platform || '抖音', url: '', final_title: task.title, note: '' };
+        this.form = { platform: task.platform || '抖音', url: '', final_title: task.title, published_at: '', note: '' };
+        this.open = true;
+      });
+      bus.on('open-publish-import', () => {
+        const now = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+        this.mode = 'external';
+        this.task = null;
+        this.form = { platform: '抖音', url: '', final_title: '', published_at: now, note: '' };
         this.open = true;
       });
     },
@@ -214,10 +227,16 @@
       close() { this.open = false; },
       async submit() {
         if (!this.form.url.trim()) { toast('请填写发布链接', 'warn'); return; }
+        if (!this.form.final_title.trim()) { toast('请填写最终标题', 'warn'); return; }
         this.busy = true;
         try {
-          const r = await api.post('/api/publications', { task_id: this.task.id, ...this.form });
+          const r = this.mode === 'external'
+            ? await api.post('/api/publications/import', this.form)
+            : await api.post('/api/publications', { task_id: this.task.id, ...this.form });
           toast(r.note); this.close(); bus.emit('board-changed');
+          if (r.id) {
+            location.href = '/?publication=' + encodeURIComponent(r.id) + '#/retro';
+          }
         } catch (e) { handleError(e); }
         this.busy = false;
       },
@@ -225,19 +244,21 @@
     template: `
     <div class="modal" :class="{open}" @click.self="close">
       <div class="modal-card" style="width:520px">
-        <div class="modal-head"><div class="modal-title">发布登记 <span class="badge b-info">手动登记 · MVP 不自动发布</span></div>
+        <div class="modal-head"><div class="modal-title">{{ mode==='external' ? '补录已发布内容' : '发布登记' }} <span class="badge b-info">{{ mode==='external' ? '工作台外发布 · 仅实绩复盘' : '计划内发布 · 保留预测链' }}</span></div>
           <button class="modal-x" @click="close">✕</button></div>
-        <div class="modal-body" v-if="task">
-          <div class="field"><label>内容</label><div style="font-weight:600">{{ task.title }}</div></div>
+        <div class="modal-body" v-if="task || mode==='external'">
+          <div class="callout c-info" v-if="mode==='external'"><span>说明</span><span>适用于随手创作、在其他工具完成并已发布的内容。系统会保存发布记录和真实快照，但不会事后补造发布前预测。</span></div>
+          <div class="field" v-if="task"><label>已确认定稿</label><div style="font-weight:600">{{ task.title }}</div></div>
           <div class="field"><label>发布平台</label><input class="input" v-model="form.platform"></div>
           <div class="field"><label>发布链接（必填）</label><input class="input" v-model="form.url" placeholder="https://..."></div>
-          <div class="field"><label>最终标题</label><input class="input" v-model="form.final_title"></div>
+          <div class="field"><label>最终标题（必填）</label><input class="input" v-model="form.final_title"></div>
+          <div class="field" v-if="mode==='external'"><label>实际发布时间</label><input class="input" type="datetime-local" v-model="form.published_at"></div>
           <div class="field"><label>临时修改说明</label><input class="input" v-model="form.note"></div>
-          <div class="mini-note">登记后自动创建 T+1 / T+3 / T+7 公开数据快照计划。</div>
+          <div class="mini-note">登记后自动创建 T+1 / T+3 / T+7 公开数据快照计划；重复链接不会重复入库。</div>
         </div>
         <div class="modal-foot">
           <button class="btn" @click="close">取消</button>
-          <button class="btn btn-pri" :disabled="busy" @click="submit">登记并创建快照计划</button>
+          <button class="btn btn-pri" :disabled="busy" @click="submit">{{ busy ? '正在登记…' : '登记并创建快照计划' }}</button>
         </div>
       </div>
     </div>`,

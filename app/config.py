@@ -18,6 +18,9 @@ def _default_data_dir() -> Path:
     if override:
         return Path(override).expanduser().resolve()
     if getattr(sys, "frozen", False):
+        if sys.platform == "darwin":
+            return (Path.home() / "Library" / "Application Support" /
+                    "JianzhouMediaWorkbench").resolve()
         local_app_data = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         if local_app_data:
             return (Path(local_app_data) / "JianzhouMediaWorkbench").resolve()
@@ -33,6 +36,11 @@ UPLOAD_DIR = DATA_DIR / "uploads"
 FRONTEND_DIR = RESOURCE_DIR / "frontend"
 
 DEMO_MODE = os.environ.get("JIANZHOU_DEMO", "1") == "1"
+BUILD_PROFILE = os.environ.get(
+    "JIANZHOU_BUILD_PROFILE",
+    "packaged" if getattr(sys, "frozen", False) else "source",
+).strip() or "source"
+BUILD_ID = os.environ.get("JIANZHOU_BUILD_ID", "workspace-schema32-channel-permission-evidence").strip() or "unknown"
 
 
 def set_demo_mode(enabled: bool) -> None:
@@ -70,7 +78,7 @@ DEFAULT_SETTINGS = {
         "hot_words": "TikHub, 归因翻转, 林小舟, 向上管理",
     },
     "llm": {
-        "configVersion": 2,
+        "configVersion": 3,
         "protocol": "openai_compatible",
         "auth_mode": "bearer",
         "allow_private_network": False,
@@ -79,8 +87,40 @@ DEFAULT_SETTINGS = {
         "writing_model": "gpt-4o-mini",
         "structured_model": "gpt-4o-mini",
         "embedding_model": "本地 bge-m3",
+        "writing_style_default": "light",
+        "writing_quality_mode": "quality_first",
         "api_base": "https://api.openai.com/v1",
         "api_key": "",
+    },
+    "image": {
+        "configVersion": 1,
+        "protocol": "openai_compatible_images",
+        "auth_mode": "bearer",
+        "allow_private_network": False,
+        "api_base": "",
+        "api_key": "",
+        "model": "",
+        "generation_path": "images/generations",
+        "default_mode": "ai_background",
+        "default_ratio": "3:4",
+        "default_variants": 2,
+        "quality": "high",
+    },
+    "wechat_official": {
+        "configVersion": 2,
+        "enabled": False,
+        "account_name": "",
+        "original_id": "",
+        "account_type": "subscription",
+        "verified": False,
+        "app_id": "",
+        "app_secret": "",
+        "default_author": "见舟AI",
+        "default_thumb_media_id": "",
+        "draft_push_enabled": True,
+        "publish_enabled": False,
+        "auto_publish_enabled": False,
+        "ip_whitelist_note": "",
     },
     "cost": {
         "daily_budget": 20.0,
@@ -99,7 +139,7 @@ DEFAULT_SETTINGS = {
     },
     # 数据源：配置驱动的 endpoint 映射（借鉴参考项目）。换供应商零代码，只改这里。
     "datasource": {
-        "mappingVersion": 3,
+        "mappingVersion": 10,
         "active": "tikhub",
         "providers": {
             "tikhub": {
@@ -176,8 +216,20 @@ DEFAULT_SETTINGS = {
                                            "video_count": "$.data.userInfo.stats.videoCount"}},
                     },
                     "accountVideos": {
-                        "douyin": {"path": "/api/v1/douyin/web/fetch_user_post_videos",
-                                   "params": {"sec_user_id": "{uid}", "max_cursor": "{cursor}", "count": "{limit}"},
+                        "douyin": {"path": "/api/v1/douyin/app/v3/fetch_user_post_videos",
+                                   "params": {"sec_user_id": "{uid}", "max_cursor": "{cursor}",
+                                              "count": "{limit}", "sort_type": "0"},
+                                   "fallback": {"path": "/api/v1/douyin/web/fetch_user_post_videos",
+                                                "params": {"sec_user_id": "{uid}", "max_cursor": "{cursor}",
+                                                           "count": "{limit}", "filter_type": "0"},
+                                                "list": "$.data.aweme_list", "cursorPath": "$.data.max_cursor",
+                                                "hasMorePath": "$.data.has_more",
+                                                "map": {"video_id": "$.aweme_id", "title": "$.desc",
+                                                        "cover": "$.video.cover.url_list[0]", "url": "$.share_url",
+                                                        "create_time": "$.create_time", "plays": "$.statistics.play_count",
+                                                        "likes": "$.statistics.digg_count", "comments": "$.statistics.comment_count",
+                                                        "collects": "$.statistics.collect_count", "shares": "$.statistics.share_count",
+                                                        "duration": "$.duration"}},
                                    "list": "$.data.aweme_list", "cursorPath": "$.data.max_cursor",
                                    "hasMorePath": "$.data.has_more",
                                    "map": {"video_id": "$.aweme_id", "title": "$.desc",
@@ -236,13 +288,16 @@ DEFAULT_SETTINGS = {
                                      "startCursor": "", "pageSize": 20,
                                      "list": ["$.data.videos", "$.data.feeds", "$.data.list"],
                                      "cursorPath": ["$.data.last_buffer", "$.data.next_buffer"],
-                                     "hasMorePath": ["$.data.has_more", "$.data.hasMore"],
-                                     "map": {"video_id": ["$.object_id", "$.id"], "title": ["$.description", "$.desc"],
-                                             "cover": ["$.cover_url", "$.cover"], "url": "$.share_url",
+                                     "hasMorePath": ["$.data.has_more", "$.data.hasMore", "$.data.up_continue"],
+                                     "map": {"video_id": ["$.id", "$.object_id"],
+                                             "title": ["$.title[0].shortTitle", "$.description", "$.desc"],
+                                             "cover": ["$.media.cover_url", "$.cover_img_url", "$.cover_url", "$.cover"],
+                                             "cover_token": "$.media.cover_url_token",
+                                             "url": "$.share_url",
                                              "create_time": ["$.create_time", "$.createtime"],
                                              "plays": ["$.read_count", "$.view_count"], "likes": "$.like_count",
                                              "comments": "$.comment_count", "collects": "$.fav_count",
-                                             "shares": "$.forward_count", "duration": "$.duration"}},
+                                             "shares": "$.forward_count", "duration": ["$.media.duration", "$.duration"]}},
                         "tiktok": {"path": "/api/v1/tiktok/web/fetch_user_post",
                                    "params": {"secUid": "{uid}", "cursor": "{cursor}", "count": "20",
                                               "coverFormat": "2", "post_item_list_request_type": "0"},
@@ -256,10 +311,47 @@ DEFAULT_SETTINGS = {
                                            "comments": "$.stats.commentCount", "collects": "$.stats.collectCount",
                                            "shares": "$.stats.shareCount", "duration": "$.video.duration"}},
                     },
+                    "workShareUrl": {
+                        "channels": {"path": "/api/v1/wechat_channels/v2/fetch_video_share_url",
+                                     "method": "POST", "timeout": 45,
+                                     "bodyMap": {"object_id": "{videoId}", "raw": False},
+                                     "map": {"url": "$.data.share_url"}},
+                    },
+                    "searchContent": {
+                        "douyin": {"path": "/api/v1/douyin/search/fetch_general_search_v1",
+                                   "method": "POST", "timeout": 60, "raw": True,
+                                   "bodyMap": {"keyword": "{keyword}", "cursor": 0,
+                                               "sort_type": "0", "publish_time": "0",
+                                               "filter_duration": "0", "search_id": "", "backtrace": ""}},
+                        "xhs": {"path": "/api/v1/xiaohongshu/app_v2/search_notes",
+                                "params": {"keyword": "{keyword}", "page": "1",
+                                           "sort_type": "general", "note_type": "不限",
+                                           "time_filter": "不限", "search_id": "",
+                                           "search_session_id": "", "source": "explore_feed", "ai_mode": "0"},
+                                "raw": True},
+                        "tiktok": {"path": "/api/v1/tiktok/app/v3/fetch_general_search_result",
+                                   "params": {"keyword": "{keyword}", "offset": "0", "count": "{limit}",
+                                              "sort_type": "0", "publish_time": "0"}, "raw": True},
+                    },
                     "videoText": {
                         "douyin": {"path": "/api/v1/douyin/web/fetch_one_video",
                                    "params": {"aweme_id": "{videoId}"},
                                    "map": {"text": "$.data.aweme_detail.desc"}},
+                    },
+                    "videoMedia": {
+                        "douyin": {
+                            "path": "/api/v1/douyin/app/v3/fetch_video_high_quality_play_url",
+                            "params": {"aweme_id": "{videoId}", "region": "CN"},
+                            "map": {"url": "$.data.original_video_url",
+                                    "mime_type": "$.data.video_data.format"},
+                            "fallback": {
+                                "path": "/api/v1/douyin/web/fetch_one_video",
+                                "params": {"aweme_id": "{videoId}"},
+                                "map": {"url": ["$.data.aweme_detail.video.play_addr.url_list[0]",
+                                                  "$.data.aweme_detail.video.download_addr.url_list[0]"],
+                                        "mime_type": "$.data.aweme_detail.video.format"},
+                            },
+                        },
                     },
                     "videoComments": {
                         "douyin": {"path": "/api/v1/douyin/web/fetch_video_comments",
@@ -272,6 +364,21 @@ DEFAULT_SETTINGS = {
                                 "list": "$.data.data.comments",
                                 "map": {"user": "$.user_info.nickname", "text": "$.content",
                                         "likes": "$.like_count"}},
+                    },
+                    "platformHot": {
+                        "douyin": {"path": "/api/v1/douyin/web/fetch_hot_search_result",
+                                   "raw": True},
+                        "xhs": {"path": "/api/v1/xiaohongshu/web_v3/fetch_search_suggest",
+                                "params": {"keyword": ""}, "raw": True},
+                        "bilibili": {"path": "/api/v1/bilibili/web/fetch_hot_search",
+                                     "params": {"limit": "{limit}"}, "raw": True},
+                        "kuaishou": {"path": "/api/v1/kuaishou/web/fetch_kuaishou_hot_list_v1",
+                                     "raw": True},
+                        "weibo": {"path": "/api/v1/weibo/web/fetch_hot_search",
+                                  "raw": True},
+                        "zhihu": {"path": "/api/v1/zhihu/web/fetch_hot_list",
+                                  "params": {"limit": "{limit}", "desktop": "true"},
+                                  "raw": True},
                     },
                 },
             },

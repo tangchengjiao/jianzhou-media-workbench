@@ -17,7 +17,8 @@ def resolve_context(user_id: str, task_type: str, *,
                     source_content_id: str | None = None,
                     source_chain: list[str] | None = None) -> dict:
     refs: list[dict] = []
-    content: dict = {"profile": None, "packages": [], "rules": [], "source": None}
+    content: dict = {"profile": None, "packages": [], "rules": [], "source": None,
+                     "ideas": []}
 
     profile = query_one(
         "SELECT id,version_no,content_json FROM profile_versions"
@@ -58,7 +59,28 @@ def resolve_context(user_id: str, task_type: str, *,
             content["source"] = source
             refs.append({"type": "source_content", "id": source["id"]})
 
-    content["requested_source_chain"] = source_chain or []
+    requested = [str(item) for item in (source_chain or []) if str(item).strip()]
+    if requested:
+        placeholders = ",".join("?" for _ in requested)
+        ideas = query(
+            f"SELECT id,item_type,title,body,personal_judgement,source_kind,source_url,"
+            f"media_json,tags_json,created_at,updated_at FROM content_ideas "
+            f"WHERE user_id=? AND deleted_at IS NULL AND id IN ({placeholders}) "
+            f"ORDER BY updated_at,id",
+            (user_id, *requested),
+        )
+        for idea in ideas:
+            idea["media"] = [
+                {"id": item.get("id"), "name": item.get("name"),
+                 "content_type": item.get("content_type"), "size": item.get("size")}
+                for item in jloads(idea.pop("media_json"), []) if isinstance(item, dict)
+            ]
+            idea["tags"] = jloads(idea.pop("tags_json"), [])
+            content["ideas"].append(idea)
+            refs.append({"type": "content_idea", "id": idea["id"],
+                         "version": idea.get("updated_at")})
+
+    content["requested_source_chain"] = requested
     serialized = jdumps(content)
     checksum = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
     run_id = new_id("CTX")

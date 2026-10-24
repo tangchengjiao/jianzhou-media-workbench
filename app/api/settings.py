@@ -20,6 +20,8 @@ SECRET_FIELDS = {
     ("source", "tikhub_api_key"): "tikhub_api_key",
     ("llm", "api_key"): "llm_api_key",
     ("voice", "api_key"): "asr_api_key",
+    ("image", "api_key"): "image_api_key",
+    ("wechat_official", "app_secret"): "wechat_app_secret",
 }
 
 
@@ -59,11 +61,13 @@ def _deep_merge(base: dict, update: dict) -> dict:
 
 
 def migrate_legacy_secrets() -> None:
-    """Move plaintext secrets from legacy SQLite settings into DPAPI storage."""
+    """Move plaintext secrets from legacy SQLite into the OS credential store."""
     for section, field, secret_name in (
         ("source", "tikhub_api_key", "tikhub_api_key"),
         ("llm", "api_key", "llm_api_key"),
         ("voice", "api_key", "asr_api_key"),
+        ("image", "api_key", "image_api_key"),
+        ("wechat_official", "app_secret", "wechat_app_secret"),
     ):
         row = query_one("SELECT value_json FROM app_settings WHERE key=?", (section,))
         values = jloads(row["value_json"], {}) if row else {}
@@ -151,13 +155,15 @@ def put_settings(body: SettingsIn):
         _validate_llm_values(merged)
     if body.section == "voice":
         _validate_voice_values(merged)
+    if body.section == "image":
+        _validate_image_values(merged)
     for secret_name, secret_value in secret_updates:
         set_secret(secret_name, secret_value)
     execute("INSERT OR REPLACE INTO app_settings VALUES(?,?)",
             (body.section, jdumps(merged)))
     if body.section == "execution":
         config.set_demo_mode(merged.get("mode") != "real")
-    return ok({"note": "设置已保存；密钥由当前 Windows 用户的 DPAPI 加密，且不会通过 API 回传",
+    return ok({"note": "设置已保存；密钥由当前操作系统的安全凭据库保护，且不会通过 API 回传",
                "demo_mode": config.DEMO_MODE})
 
 
@@ -213,14 +219,63 @@ def _validate_voice_values(values: dict) -> None:
     values["asr_model"] = model
 
 
+def _validate_image_values(values: dict) -> None:
+    from ..providers import _validate_llm_url
+    from ..image_provider import normalize_image_endpoint
+    if values.get("protocol") != "openai_compatible_images":
+        raise validation_failed("图片模型协议必须是 OpenAI Compatible Images")
+    if values.get("auth_mode") not in {"bearer", "none"}:
+        raise validation_failed("图片模型鉴权方式只能是 bearer 或 none")
+    base_url, generation_path = normalize_image_endpoint(
+        str(values.get("api_base") or ""),
+        str(values.get("generation_path") or "images/generations"),
+    )
+    if not base_url:
+        raise validation_failed("请填写图片模型 API Base URL")
+    parsed = urllib.parse.urlparse(base_url)
+    if not parsed.path or parsed.path == "/":
+        base_url += "/v1"
+    try:
+        _validate_llm_url(base_url, allow_private=bool(values.get("allow_private_network")))
+    except Exception as exc:
+        if getattr(exc, "code", None):
+            raise validation_failed(exc.message)
+        raise
+    model = str(values.get("model") or "").strip()
+    if not model or len(model) > 200:
+        raise validation_failed("请填写有效的图片模型名称")
+    if not generation_path or ".." in generation_path or "://" in generation_path:
+        raise validation_failed("图片生成路径必须是相对 API 路径")
+    if values.get("default_ratio") not in {"3:4", "9:16", "16:9", "1:1"}:
+        raise validation_failed("默认图片比例不受支持")
+    variants = int(values.get("default_variants") or 1)
+    if variants < 1 or variants > 4:
+        raise validation_failed("默认候选数量必须是 1–4")
+    values.update({"api_base": base_url, "model": model,
+                   "generation_path": generation_path,
+                   "default_variants": variants})
+
+
 @router.get("/settings/runtime")
 def runtime():
+    version = query_one("PRAGMA user_version")
+    schema_version = next(iter(version.values())) if version else 0
     return ok({
         "demo_mode": config.DEMO_MODE,
         "app_name": config.APP_NAME,
         "version": config.APP_VERSION,
+        "build_profile": config.BUILD_PROFILE,
+        "build_id": config.BUILD_ID,
+        "schema_version": schema_version,
         "db_path": str(config.DB_PATH),
         "data_dir": str(config.DATA_DIR),
+        "resource_dir": str(config.RESOURCE_DIR),
+        "capabilities": {
+            "visual_factory": True,
+            "unified_assets": True,
+            "content_lifecycle": True,
+            "advisor": True,
+        },
     })
 
 
@@ -247,11 +302,36 @@ def diagnostics():
     voice_values = jloads(voice_row["value_json"], {}) if voice_row else {}
     asr_ready = bool(voice_values.get("api_base") and voice_values.get("asr_model")
                      and has_secret("asr_api_key"))
+    image_row = query_one("SELECT value_json FROM app_settings WHERE key='image'")
+    image_values = jloads(image_row["value_json"], {}) if image_row else {}
+    image_ready = bool(image_values.get("api_base") and image_values.get("model")
+                       and (image_values.get("auth_mode") == "none"
+                            or has_secret("image_api_key")))
     foreign_keys = query_one("PRAGMA foreign_keys")["foreign_keys"] == 1
     fk_errors = query("PRAGMA foreign_key_check")
     integrity = query_one("PRAGMA quick_check")["quick_check"]
+    version = query_one("PRAGMA user_version")
+    schema_version = next(iter(version.values())) if version else 0
     return ok({
+        "runtime": {
+            "build_profile": config.BUILD_PROFILE,
+            "build_id": config.BUILD_ID,
+            "schema_version": schema_version,
+            "data_dir": str(config.DATA_DIR),
+            "resource_dir": str(config.RESOURCE_DIR),
+            "capabilities": {
+                "visual_factory": True,
+                "unified_assets": True,
+                "content_lifecycle": True,
+                "advisor": True,
+            },
+        },
         "checks": [
+            {"name": "当前运行版本",
+             "status": "ok" if config.BUILD_PROFILE == "source" else "warn",
+             "detail": (f"{config.BUILD_PROFILE} · {config.BUILD_ID} · Schema {schema_version}")},
+            {"name": "核心能力清单", "status": "ok",
+             "detail": "视觉工厂 · 统一资料中心 · 创作生命周期 · 运营顾问"},
             {"name": "数据源（演示模式）" if config.DEMO_MODE else "TikHub API 连通性",
              "status": "ok" if (config.DEMO_MODE or has_key) else "err",
              "detail": "demo_tikhub · 演示数据" if config.DEMO_MODE
@@ -265,6 +345,11 @@ def diagnostics():
              "detail": "demo_stt · 演示数据" if config.DEMO_MODE
                        else (f"{voice_values.get('asr_model')} · 请手动测试音频"
                              if asr_ready else "配置不完整")},
+            {"name": "图片模型（演示模式）" if config.DEMO_MODE else "图片模型配置",
+             "status": "ok" if (config.DEMO_MODE or image_ready) else "warn",
+             "detail": "demo_image · 演示背景" if config.DEMO_MODE
+                       else (f"{image_values.get('model')} · 请手动生成测试"
+                             if image_ready else "未配置 · 视觉工厂仅允许显式本地模板模式")},
             {"name": "FFmpeg", "status": "ok" if ffmpeg else "warn",
              "detail": ffmpeg or "未在 PATH 中找到（媒体处理功能受限，不影响其他功能）"},
             {"name": "本地存储权限", "status": "ok" if writable else "err",
@@ -367,6 +452,24 @@ def llm_check(body: LLMCheckIn):
     from ..providers import RealLLMProvider
     result = RealLLMProvider().check_connection(body.model)
     return ok({**result, "note": f"模型 {result['model']} 连接与最小生成测试通过。"})
+
+
+@router.post("/image/check")
+def image_check():
+    """显式、可能计费的图片模型最小生成测试。"""
+    from ..image_provider import get_image_provider
+    from ..jobs import record_usage
+    provider = get_image_provider()
+    if config.DEMO_MODE:
+        result = provider.generate("演示图片背景", "1:1")
+        payload = {"provider": result["provider"], "model": result["model"],
+                   "reachable": True, "image_bytes": len(result["bytes"]),
+                   "request_id": result["request_id"]}
+    else:
+        payload = provider.check_connection()
+    record_usage(current_user_id(), "图片模型连通测试", payload["provider"],
+                 "images/generations", payload["model"], 0.0, "1 张")
+    return ok({**payload, "note": f"图片模型 {payload['model']} 已返回有效图片。"})
 
 
 @router.post("/stt/check")

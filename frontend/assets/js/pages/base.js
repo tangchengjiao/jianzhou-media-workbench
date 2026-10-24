@@ -154,12 +154,12 @@
             <div class="card-head"><div class="card-title">任务队列</div></div>
             <div class="card-body" style="padding-top:4px">
               <div class="kv-row" v-for="t in tasks.running" :key="t.id">
-                <span>{{ t.title }}</span>
+                <span>{{ t.title }} <small v-if="t.history_count>1">· {{ t.history_count }} 次运行记录</small></span>
                 <span class="badge b-pri pulse" v-if="t.status==='RUNNING'"><span class="sdot"></span>执行中 {{ t.progress }}%</span>
                 <span class="badge b-neu" v-else>{{ t.status==='QUEUED'?'排队中':'取消中' }}</span>
               </div>
               <div class="kv-row" v-for="t in tasks.recent_done" :key="t.id">
-                <span>{{ t.title }}</span><span class="badge b-ok">已完成</span>
+                <span>{{ t.title }} <small v-if="t.history_count>1">· {{ t.history_count }} 次运行记录</small></span><span class="badge b-ok">已完成</span>
               </div>
               <div class="mini-note" style="margin-top:8px">任务不存在「自动成功」：每个状态转换都由明确事件驱动，可在系统设置 → 系统诊断中查询 Trace ID。</div>
             </div>
@@ -179,6 +179,7 @@
         recording: false, mediaRecorder: null, finishing: false,
         versionOpen: false, versionSaving: false, versionError: null,
         versionDraft: {}, versionReason: '',
+        applyingCandidates: false, archiveDraft: null, archiveSaving: false,
       };
     },
     async mounted() { await this.load(); },
@@ -195,10 +196,15 @@
           this.corpus = cp; this.style = st; this.topics = tp; this.sessions = ss;
         } catch (e) { handleError(e); }
       },
-      fs(key) { return (this.profile.content.field_sources || {})[key]; },
+      fs(key) { return (((this.profile || {}).content || {}).field_sources || {})[key]; },
       trace(title, src) { bus.emit('open-trace', { title, src: src.src, quote: src.quote }); },
       async confirmField(c) {
-        try { const r = await api.post('/api/profile/candidates/' + c.id + '/confirm'); toast(r.note); await this.load(); }
+        try {
+          if ((c.edited_value || c.value || '').trim() !== (c.value || '').trim()) {
+            await api.patch('/api/profile/candidates/' + c.id, { value: c.edited_value, decision_note: '用户在确认前修订' });
+          }
+          const r = await api.post('/api/profile/candidates/' + c.id + '/confirm'); toast(r.note); await this.load();
+        }
         catch (e) { handleError(e); }
       },
       async rejectField(c) {
@@ -212,8 +218,38 @@
         } catch (e) { handleError(e); }
       },
       async resumeSession(s) {
-        try { this.activeSession = await api.get('/api/profile/interviews/' + s.id); }
+        try {
+          this.activeSession = await api.get('/api/profile/interviews/' + s.id);
+          const a = (this.activeSession.archives || [])[0];
+          this.archiveDraft = a ? { title: a.title, summary: a.summary,
+            corrected_transcript: a.corrected_transcript, tags_text: (a.tags || []).join('、'), notes: a.notes || '' } : null;
+        }
         catch (e) { handleError(e); }
+      },
+      async applyConfirmedCandidates() {
+        this.applyingCandidates = true;
+        try {
+          const preview = await api.post('/api/profile/change-sets/preview', {});
+          const fields = Object.keys(preview.preview.after || {}).join('、');
+          if (!confirm(`将以下字段写入一个新的IP档案版本：${fields}\n原档案版本会保留。是否继续？`)) return;
+          const r = await api.post('/api/profile/change-sets/' + preview.id + '/confirm');
+          toast(`已创建并激活 ${r.version_no}`); await this.load();
+        } catch (e) { handleError(e); }
+        finally { this.applyingCandidates = false; }
+      },
+      async saveArchiveRevision() {
+        if (!this.activeSession || !this.archiveDraft) return;
+        this.archiveSaving = true;
+        try {
+          const r = await api.post('/api/profile/interviews/' + this.activeSession.id + '/archive-revisions', {
+            title: this.archiveDraft.title, summary: this.archiveDraft.summary,
+            corrected_transcript: this.archiveDraft.corrected_transcript,
+            tags: this.archiveDraft.tags_text.split(/[、,，]/).map(x => x.trim()).filter(Boolean),
+            notes: this.archiveDraft.notes,
+          });
+          toast(r.note); await this.resumeSession({ id: this.activeSession.id }); await this.load();
+        } catch (e) { handleError(e); }
+        this.archiveSaving = false;
       },
       async sendAnswer() {
         const v = this.answer.trim();
@@ -286,7 +322,7 @@
         if (!this.versionReason.trim()) { this.versionError = { code: 'VALIDATION_FAILED', message: '请填写本次修改原因。' }; return; }
         this.versionSaving = true; this.versionError = null;
         try {
-          const content = { ...this.profile.content, ...this.versionDraft };
+          const content = { ...((this.profile || {}).content || {}), ...this.versionDraft };
           content.pillars = this.versionDraft.pillars_text.split(/[、,，]/).map((x) => x.trim()).filter(Boolean);
           content.banned_words = this.versionDraft.banned_words_text.split(/[、,，]/).map((x) => x.trim()).filter(Boolean);
           delete content.pillars_text; delete content.banned_words_text;
@@ -308,6 +344,8 @@
           <button class="btn btn-pri" @click="startInterview('完整建档','text')">开始访谈</button></div>
       </div>
 
+      <div class="empty section-gap" v-if="!profile"><b>尚未建立真实 IP 档案</b><span>真实工作空间不会填入任何演示定位。你可以从空白档案开始，或先完成一次建档访谈。</span><button class="btn btn-pri" @click="openVersionEditor">创建第一版 IP 档案</button></div>
+
       <div class="card section-gap" v-if="profile">
         <div class="card-head"><div class="card-title">IP 总览 <span class="badge b-ok">{{ profile.version_no }} · 当前激活</span></div>
           <span class="mini-note">最近更新 {{ profile.created_at.slice(0,10) }} · 每个字段均可追溯来源</span></div>
@@ -321,6 +359,16 @@
           <div><div class="dt">转化方向</div><div class="dd">{{ profile.content.monetization }}</div></div>
           <div><div class="dt">禁用表达 <span class="badge b-warn" v-if="pendingCandidates.length">待确认 {{ pendingCandidates.length }}</span></div>
             <div class="dd">{{ (profile.content.banned_words||[]).map(w=>'“'+w+'”').join('') || '—' }}</div></div>
+          <div v-if="profile.content.ip_type"><div class="dt">IP 类型</div><div class="dd">{{ profile.content.ip_type }}</div></div>
+          <div v-if="(profile.content.not_for||[]).length"><div class="dt">不适合人群</div><div class="dd">{{ profile.content.not_for.join(' · ') }}</div></div>
+          <div v-if="(profile.content.trust_assets||[]).length"><div class="dt">核心信任资产</div><div class="dd">{{ profile.content.trust_assets.join(' · ') }}</div></div>
+          <div v-if="(profile.content.offer_ladder||[]).length"><div class="dt">产品阶梯</div><div class="dd">{{ profile.content.offer_ladder.join(' → ') }}</div></div>
+          <div v-if="(profile.content.expression_style||[]).length"><div class="dt">表达风格</div><div class="dd">{{ profile.content.expression_style.join(' · ') }}</div></div>
+          <div v-if="(profile.content.spoken_style_rules||[]).length"><div class="dt">口语生成规则</div><div class="dd">{{ profile.content.spoken_style_rules.join(' · ') }}</div></div>
+          <div v-if="(profile.content.voice_samples||[]).length"><div class="dt">本人原话样本 <span class="badge b-ok">已进入生成上下文</span></div><div class="dd"><div class="voice-sample" v-for="sample in profile.content.voice_samples" :key="sample">“{{ sample }}”</div></div></div>
+          <div v-if="(profile.content.expression_boundaries||[]).length"><div class="dt">表达边界</div><div class="dd">{{ profile.content.expression_boundaries.join(' · ') }}</div></div>
+          <div v-if="profile.content.validation_status"><div class="dt">资料状态</div><div class="dd">{{ profile.content.validation_status }}</div></div>
+          <div v-if="(profile.content.source_refs||[]).length"><div class="dt">来源资料</div><div class="dd"><div class="mini-note" v-for="ref in profile.content.source_refs" :key="ref">{{ ref }}</div></div></div>
         </div></div>
       </div>
 
@@ -338,6 +386,7 @@
           <div class="iv-log" id="ivLog">
             <div class="iv-msg" v-for="t in sessionTurns" :key="t.id" :class="t.role==='user'?'a':'q'">{{ t.text }}</div>
           </div>
+          <template v-if="activeSession.status==='IN_PROGRESS'||activeSession.status==='PAUSED'||activeSession.status==='READY_TO_FINISH'">
           <div class="chat-input" style="margin-top:10px">
             <input class="input" v-model="answer" placeholder="输入回答，或按住麦克风语音作答" @keydown.enter="sendAnswer">
             <button class="btn" :class="{'btn-danger':recording}" @click="toggleRecord">{{ recording ? '■ 停止' : '🎙' }}</button>
@@ -347,6 +396,15 @@
             <button class="btn btn-sm" @click="pauseInterview">暂停（保存进度）</button>
             <button class="btn btn-sm btn-pri" :disabled="finishing" @click="finishInterview">结束访谈并生成字段候选</button>
             <span class="mini-note">中断不会生成「建档成功」的假结果；切换模式需你显式选择并记录来源。</span>
+          </div>
+          </template>
+          <div v-else-if="archiveDraft" class="section-gap">
+            <div class="callout c-info"><span>存档</span><span>原始访谈轮次永久保留；下面修改会保存为新的人工修订版，不覆盖原文。</span></div>
+            <label class="field"><span>存档标题</span><input class="input" v-model="archiveDraft.title"></label>
+            <label class="field"><span>摘要</span><textarea class="input" rows="3" v-model="archiveDraft.summary"></textarea></label>
+            <label class="field"><span>校正版逐字稿</span><textarea class="input" rows="10" v-model="archiveDraft.corrected_transcript"></textarea></label>
+            <div class="grid g2"><label class="field"><span>标签（顿号分隔）</span><input class="input" v-model="archiveDraft.tags_text"></label><label class="field"><span>人工备注</span><input class="input" v-model="archiveDraft.notes"></label></div>
+            <button class="btn btn-pri" :disabled="archiveSaving" @click="saveArchiveRevision">{{ archiveSaving ? '保存中…' : '另存为人工修订版本' }}</button>
           </div>
         </div>
       </div>
@@ -371,6 +429,7 @@
               </template>
               <button class="btn" @click="startInterview('表达风格','voice')">新建语音访谈</button>
             </div>
+            <div class="section-gap" v-if="sessions.length"><div class="mini-note" style="margin-bottom:6px">历史访谈与存档</div><button class="chip" v-for="s in sessions.slice(0,6)" :key="s.id" @click="resumeSession(s)">{{ s.topic }} · {{ s.status }}</button></div>
           </div>
         </div>
 
@@ -383,12 +442,13 @@
               <div class="fc-body">
                 <div class="fc-name">{{ c.field_path }}
                   <span class="badge" :class="c.inference_type==='inferred'?'b-warn':'b-ok'">{{ c.inference_type==='inferred'?'模型推断':c.inference_type==='summarized'?'摘要':'明确表述' }}</span></div>
-                <div class="fc-val">{{ c.value }}</div>
+                <input class="input" style="margin:6px 0" v-model="c.edited_value" :placeholder="c.value">
                 <div class="fc-src">来源：{{ c.evidence }} · 置信度 {{ c.confidence }}</div>
               </div>
               <button class="btn btn-sm btn-pri" @click="confirmField(c)">{{ c.inference_type==='inferred'?'确认':'接受' }}</button>
               <button class="btn btn-sm btn-ghost" @click="rejectField(c)">拒绝</button>
             </div>
+            <button class="btn btn-pri" style="width:100%;margin-top:10px" v-if="candidates.some(c=>c.status==='confirmed')" :disabled="applyingCandidates" @click="applyConfirmedCandidates">{{ applyingCandidates ? '生成变更预览中…' : '预览并应用已确认字段到新档案版本' }}</button>
           </div>
         </div>
       </div>
@@ -455,9 +515,14 @@
     data() {
       return {
         accounts: [], cycle: null, suggestions: [], datasource: { platforms: [] },
-        selected: null, snapshots: [], fanSeries: '', fanArea: '',
+        selected: null, snapshots: [], fanSeries: '', fanArea: '', selectedWorks: [],
+        workSort: 'latest', workFilter: 'all', workSavingId: null,
         addOpen: false, adding: false, addError: null, lastResult: null,
         cycleOpen: false, cycleSaving: false, cycleDraft: {},
+        batchOpen: false, batchBusy: false,
+        importWorkOpen: false, importWorkBusy: false, importWorkForm: { link: '', title: '' },
+        portrait: null, advisorPlans: [], advisorHistory: [], advisorHistoryOpen: false, advisorContext: null, advisorBusy: false,
+        advisorStartingTaskId: null,
         form: { platform: 'douyin', link: '', display_name: '', source_mode: 'provider', sync_frequency: '每 6 小时' },
       };
     },
@@ -466,6 +531,26 @@
       selectedPlatform() {
         return this.platformOptions.find((item) => item.id === this.form.platform)
           || { label: '账号', id_label: '主页链接 / 平台 ID', placeholder: '粘贴账号主页链接或输入平台 ID' };
+      },
+      allOwnWorks() { return (this.selected && this.selected.works) || []; },
+      ownWorks() {
+        let works = [...this.allOwnWorks];
+        if (this.workFilter === 'high' || this.workFilter === 'low') {
+          works = works.filter((work) => work.performance_band === this.workFilter);
+        } else if (this.workFilter !== 'all') {
+          works = works.filter((work) => work.performance_label === this.workFilter);
+        }
+        const byTime = (a, b) => Number(b.create_time || 0) - Number(a.create_time || 0);
+        if (this.workSort === 'oldest') works.sort((a, b) => -byTime(a, b));
+        else if (this.workSort === 'performance') works.sort((a, b) => Number(b.performance_score || 0) - Number(a.performance_score || 0) || byTime(a, b));
+        else if (this.workSort === 'likes') works.sort((a, b) => Number(b.likes || 0) - Number(a.likes || 0) || byTime(a, b));
+        else works.sort(byTime);
+        return works;
+      },
+      workFeedStale() {
+        const latest = Number(this.selected?.extra?.latest_work_at || 0);
+        return Boolean(this.selected?.platform === 'douyin' && latest
+          && latest * 1000 < Date.now() - 3 * 86400000);
       },
     },
     async mounted() {
@@ -479,13 +564,18 @@
       }
     },
     methods: {
+      go,
       async load() {
         try {
-          const [a, c, s, ds] = await Promise.all([
+          const [a, c, s, ds, portrait, plans, advisorHistory, advisorContext] = await Promise.all([
             api.get('/api/accounts'), api.get('/api/accounts/cycle/current'),
             api.get('/api/accounts/suggestions/list'), api.get('/api/datasource/status'),
+            api.get('/api/advisor/portrait/latest'), api.get('/api/advisor/plans?scope=active'),
+            api.get('/api/advisor/plans?scope=history&limit=30'),
+            api.get('/api/advisor/context/latest'),
           ]);
           this.accounts = a; this.cycle = c; this.suggestions = s; this.datasource = ds;
+          this.portrait = portrait; this.advisorPlans = plans; this.advisorHistory = advisorHistory; this.advisorContext = advisorContext;
           if (this.selected) {
             const current = a.find((item) => item.id === this.selected.id);
             if (current) await this.openAccount(current);
@@ -521,11 +611,12 @@
         try {
           this.selected = await api.get('/api/accounts/' + encodeURIComponent(account.id));
           this.snapshots = this.selected.snapshots || [];
+          this.selectedWorks = this.selectedWorks.filter((id) => (this.selected.works || []).some((work) => work.id === id));
           this.renderFanSeries();
           if (scroll) this.$nextTick(() => document.getElementById('accountDetail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
         } catch (e) { handleError(e); }
       },
-      closeAccount() { this.selected = null; this.snapshots = []; this.fanSeries = ''; this.fanArea = ''; },
+      closeAccount() { this.selected = null; this.snapshots = []; this.selectedWorks = []; this.fanSeries = ''; this.fanArea = ''; },
       renderFanSeries() {
         const pts = this.snapshots.slice(-10);
         if (!pts.length) { this.fanSeries = ''; this.fanArea = ''; return; }
@@ -549,6 +640,99 @@
           await this.waitJob(r.job_id);
         } catch (e) { handleError(e); }
       },
+      number(value) { return Number(value || 0).toLocaleString(); },
+      workDate(value) {
+        if (!value) return '时间未知';
+        return new Date(Number(value) * 1000).toLocaleDateString('zh-CN');
+      },
+      toggleAllWorks() {
+        this.selectedWorks = this.selectedWorks.length === this.ownWorks.length ? [] : this.ownWorks.map((work) => work.id);
+      },
+      async extractOwnWork(work) {
+        try {
+          const plan = await api.post('/api/extraction/plans', { account_work_id: work.id });
+          bus.emit('open-plan', plan);
+        } catch (e) { handleError(e); }
+      },
+      async openOwnWork(work) {
+        if (work.url) {
+          window.open(work.url, '_blank', 'noopener,noreferrer');
+          return;
+        }
+        const popup = window.open('', '_blank');
+        try {
+          const result = await api.post(`/api/accounts/${encodeURIComponent(this.selected.id)}/works/${encodeURIComponent(work.id)}/share-url`);
+          work.url = result.url;
+          if (popup) popup.location.href = result.url;
+          else window.open(result.url, '_blank', 'noopener,noreferrer');
+          toast('已生成并缓存原作公开链接');
+        } catch (e) {
+          if (popup) popup.close();
+          handleError(e);
+        }
+      },
+      async copyAccountIdentifier() {
+        const value = this.selected && this.selected.account_identifier;
+        if (!value) return toast('该账号没有可复制的平台 ID', 'warn');
+        try { await navigator.clipboard.writeText(value); toast('平台账号 ID 已复制'); }
+        catch (_) { toast(`账号 ID：${value}`, 'warn'); }
+      },
+      coverFailed(work) { work.cover_failed = true; },
+      performanceBand(work) {
+        return { high: '系统识别：表现较好', mid: '系统识别：常规', low: '系统识别：待复盘', unknown: '数据不足' }[work.performance_band] || '数据不足';
+      },
+      async reviewWork(work, label) {
+        this.workSavingId = work.id;
+        try {
+          const result = await api.patch(`/api/accounts/${encodeURIComponent(this.selected.id)}/works/${encodeURIComponent(work.id)}`, {
+            performance_label: label, review_note: work.review_note || '',
+          });
+          work.performance_label = result.performance_label;
+          toast(result.note);
+        } catch (e) { handleError(e); }
+        this.workSavingId = null;
+      },
+      openImportWork() {
+        this.importWorkForm = { link: '', title: '' };
+        this.importWorkOpen = true;
+        this.$nextTick(() => document.getElementById('importOwnWorkLink')?.focus());
+      },
+      async importWork() {
+        if (!this.importWorkForm.link.trim()) return toast('请粘贴抖音作品分享链接', 'warn');
+        this.importWorkBusy = true;
+        try {
+          const result = await api.post(`/api/accounts/${encodeURIComponent(this.selected.id)}/works/import`, {
+            link: this.importWorkForm.link.trim(), title: this.importWorkForm.title.trim(),
+          });
+          this.importWorkOpen = false;
+          await this.openAccount(this.selected, false);
+          toast(result.note);
+        } catch (e) { handleError(e); }
+        this.importWorkBusy = false;
+      },
+      openBatchExtract() {
+        if (!this.selectedWorks.length) return toast('请先选择至少一条自己的作品', 'warn');
+        this.batchOpen = true;
+      },
+      async confirmBatchExtract() {
+        this.batchBusy = true;
+        let created = 0;
+        const failed = [];
+        for (const id of this.selectedWorks) {
+          try {
+            const plan = await api.post('/api/extraction/plans', { account_work_id: id });
+            await api.post('/api/extraction/jobs', { plan, authorizations: { asr_when_no_caption: false } });
+            created += 1;
+          } catch (error) { failed.push(error); }
+        }
+        this.batchBusy = false;
+        this.batchOpen = false;
+        if (created) {
+          toast(`已创建 ${created} 个提取任务；优先读取缓存与原生字幕`);
+          bus.emit('jobs-changed');
+        }
+        if (failed.length) handleError(failed[0]);
+      },
       async waitJob(jobId) {
         for (let i = 0; i < 80; i += 1) {
           await new Promise((resolve) => setTimeout(resolve, 500));
@@ -556,7 +740,7 @@
           if (['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(job.status)) {
             await this.load(); refreshTopbar();
             if (job.status === 'SUCCEEDED') toast('账号同步完成，资料与今日快照已刷新');
-            else handleError(job.error_json || { code: 'ACCOUNT_SYNC_FAILED', message: '账号同步失败', trace_id: job.trace_id });
+            else handleError(job.error || { code: 'ACCOUNT_SYNC_FAILED', message: '账号同步失败', trace_id: job.trace_id });
             return;
           }
         }
@@ -592,6 +776,40 @@
         try { const result = await api.post('/api/accounts/cycle/current', { rhythm: r }); this.cycle = result.cycle; toast('更新节奏已保存'); }
         catch (e) { handleError(e); }
       },
+      async generateAdvisorPlan() {
+        this.advisorBusy = true;
+        try {
+          this.portrait = await api.post('/api/advisor/portrait/generate');
+          const d = new Date(); const day = (d.getDay() + 6) % 7;
+          d.setDate(d.getDate() - day);
+          const weekStart = d.toISOString().slice(0, 10);
+          const r = await api.post('/api/advisor/plans/generate', { week_start: weekStart, instruction: '' });
+          toast(r.note); await this.load();
+        } catch (e) { handleError(e); }
+        this.advisorBusy = false;
+      },
+      async approveAdvisorPlan(plan) {
+        try {
+          const r = await api.post('/api/advisor/plans/' + plan.id + '/approve');
+          toast(`${r.note}；现在可直接开始其中任一条内容`);
+          await this.load();
+        }
+        catch (e) { handleError(e); }
+      },
+      async startAdvisorCreation(task) {
+        if (!task || this.advisorStartingTaskId) return;
+        this.advisorStartingTaskId = task.id;
+        try {
+          const result = await api.post('/api/planning/tasks/' + encodeURIComponent(task.id) + '/start-creation');
+          toast(result.note);
+          location.href = '/?project=' + encodeURIComponent(result.project_id) + '#/creation';
+        } catch (e) { handleError(e); }
+        this.advisorStartingTaskId = null;
+      },
+      async rejectAdvisorPlan(plan) {
+        try { await api.post('/api/advisor/plans/' + plan.id + '/reject'); toast('建议草案已拒绝', 'warn'); await this.load(); }
+        catch (e) { handleError(e); }
+      },
     },
     template: `
     <section>
@@ -622,7 +840,7 @@
               <span class="trace" v-if="a.extra.trace_id" @click="bus.emit('open-error',{code:a.extra.error_code,message:a.note,stage:'account_sync',provider:a.bound_provider,retryable:false,trace_id:a.extra.trace_id,details:{charged:false}})">Trace {{ a.extra.trace_id.slice(0,12) }}…</span></span>
             </div>
             <div style="display:flex;gap:20px;margin:10px 0;font-size:12px;color:var(--ink2)">
-              <span>粉丝 <b style="color:var(--ink)">{{ a.followers.toLocaleString() }}</b></span>
+              <span>粉丝 <b style="color:var(--ink)">{{ a.followers_available ? a.followers.toLocaleString() : '—' }}</b></span>
               <span>{{ a.sync_frequency }}</span>
               <span v-if="a.last_sync_at">最近同步 {{ a.last_sync_at.slice(5,16).replace('T',' ') }}</span>
             </div>
@@ -640,17 +858,44 @@
       <div class="card section-gap" id="accountDetail" v-if="selected">
         <div class="card-head"><div class="card-title">{{ selected.display_name }} · 账号数据 <span class="badge b-ok" v-if="selected.status==='ok'">真实快照</span></div><button class="btn btn-sm" @click="closeAccount">收起</button></div>
         <div class="card-body">
-          <div class="grid g3">
-            <div><div class="dt">平台与账号 ID</div><div class="dd">{{ selected.platform_label }} · {{ selected.extra.uid }}</div></div>
-            <div><div class="dt">公开资料</div><div class="dd">粉丝 {{ selected.followers.toLocaleString() }} · 作品 {{ selected.video_count.toLocaleString() }}</div></div>
-            <div><div class="dt">数据来源</div><div class="dd">{{ selected.bound_provider }} · {{ selected.last_sync_at ? selected.last_sync_at.replace('T',' ') : '尚未同步' }}</div></div>
+          <div class="account-overview">
+            <div class="account-identity"><div class="account-avatar"><img v-if="selected.avatar" :src="selected.avatar" :alt="selected.display_name + ' 头像'"><span v-else>{{ (selected.display_name || selected.platform_label).slice(0,1) }}</span></div><div><b>{{ selected.display_name || selected.platform_label }}</b><p>{{ selected.platform_label }} · <span class="mono">{{ selected.account_identifier || '平台未返回 ID' }}</span></p><div class="account-links"><a class="text-btn" v-if="selected.can_open_homepage" :href="selected.homepage" target="_blank" rel="noreferrer">打开原账号主页 ↗</a><button class="text-btn" v-else @click="copyAccountIdentifier">复制账号 ID</button></div></div></div>
+            <div class="account-kpis"><span><small>粉丝</small><b>{{ selected.followers_available ? selected.followers.toLocaleString() : '—' }}</b><em v-if="!selected.followers_available">平台未提供</em></span><span><small>公开作品</small><b>{{ selected.video_count_available ? selected.video_count.toLocaleString() : '—' }}</b></span><span><small>数据来源</small><b>{{ selected.bound_provider }}</b></span><span><small>最近同步</small><b>{{ selected.last_sync_at ? selected.last_sync_at.replace('T',' ').slice(0,16) : '尚未同步' }}</b></span></div>
           </div>
-          <p class="mini-note" v-if="selected.bio">简介：{{ selected.bio }}</p>
-          <p v-if="selected.homepage"><a class="text-btn" :href="selected.homepage" target="_blank" rel="noreferrer">打开原账号主页 ↗</a></p>
-          <div class="settings-actions"><label class="field" style="max-width:260px"><span>同步频率</span><select class="input" v-model="selected.sync_frequency"><option>每 1 小时</option><option>每 3 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天</option><option>仅手动</option></select></label><button class="btn" @click="saveFrequency">保存频率</button></div>
+          <p class="account-bio" v-if="selected.bio">{{ selected.bio }}</p>
+          <div class="account-sync-control"><label class="field"><span>同步频率</span><select class="input" v-model="selected.sync_frequency"><option>每 1 小时</option><option>每 3 小时</option><option>每 6 小时</option><option>每 12 小时</option><option>每天</option><option>仅手动</option></select></label><button class="btn" @click="saveFrequency">保存频率</button></div>
           <div class="grid g2 section-gap">
-            <div><div class="card-title">粉丝快照</div><svg viewBox="0 0 220 64" style="width:100%;margin-top:10px" v-if="snapshots.length>1"><polygon :points="fanArea" fill="rgba(228,87,46,.12)"/><polyline :points="fanSeries" fill="none" stroke="#E4572E" stroke-width="2" stroke-linecap="round"/></svg><div class="callout c-info" style="margin-top:10px" v-else-if="snapshots.length===1"><span>首个快照</span><span><b>{{ Number(snapshots[0].followers||0).toLocaleString() }}</b> 粉丝；再次同步后显示趋势，不用单点伪造曲线。</span></div><div class="empty" v-else>尚无快照</div></div>
+            <div><div class="card-title">粉丝快照</div><div class="callout c-info" style="margin-top:10px" v-if="!selected.followers_available"><span>—</span><span>视频号本次没有返回可确认的粉丝数，因此不把缺失值显示成 0，也不生成趋势。</span></div><svg viewBox="0 0 220 64" style="width:100%;margin-top:10px" v-else-if="snapshots.length>1"><polygon :points="fanArea" fill="rgba(228,87,46,.12)"/><polyline :points="fanSeries" fill="none" stroke="#E4572E" stroke-width="2" stroke-linecap="round"/></svg><div class="callout c-info" style="margin-top:10px" v-else-if="snapshots.length===1"><span>首个快照</span><span><b>{{ Number(snapshots[0].followers||0).toLocaleString() }}</b> 粉丝；再次同步后显示趋势，不用单点伪造曲线。</span></div><div class="empty" v-else>尚无快照</div></div>
             <div><div class="card-title">快照记录</div><div class="kv-row" v-for="ss in snapshots.slice().reverse().slice(0,6)" :key="ss.id"><span>{{ ss.date }}</span><b>{{ Number(ss.followers||0).toLocaleString() }} 粉丝 · {{ ss.posts || 0 }} 作品</b></div><div class="empty" v-if="!snapshots.length">同步成功后在这里显示</div></div>
+          </div>
+          <div class="own-works-section section-gap">
+            <div class="own-works-head">
+              <div><div class="card-title">我的公开作品 <span class="card-sub">已沉淀 {{ allOwnWorks.length }} 条，可排序、标记并单独或批量提取</span></div><div class="mini-note">最新作品：{{ selected.extra.latest_work_at ? workDate(selected.extra.latest_work_at) : '平台本次未返回' }}。系统表现档位只基于当前已同步互动数据，你的人工标记优先保留。</div></div>
+              <div class="own-works-actions">
+                <select class="input input-sm" v-model="workSort" aria-label="作品排序"><option value="latest">最新发布</option><option value="oldest">最早发布</option><option value="performance">综合表现</option><option value="likes">点赞最多</option></select>
+                <select class="input input-sm" v-model="workFilter" aria-label="作品筛选"><option value="all">全部作品</option><option value="high">系统：表现较好</option><option value="low">系统：待复盘</option><option value="good">我标记：好内容</option><option value="needs_review">我标记：需复盘</option><option value="unrated">尚未标记</option></select>
+                <button class="btn btn-sm" :disabled="selected.status==='syncing'" @click="sync(selected)">{{ selected.status==='syncing' ? '同步中…' : '同步最近作品' }}</button>
+                <button class="btn btn-sm" v-if="selected.platform==='douyin'" @click="openImportWork">补录作品链接</button>
+                <button class="btn btn-sm" v-if="ownWorks.length" @click="toggleAllWorks">{{ selectedWorks.length===ownWorks.length ? '清空选择' : '全选当前作品' }}</button>
+                <button class="btn btn-sm btn-pri" :disabled="!selectedWorks.length" @click="openBatchExtract">批量提取（{{ selectedWorks.length }}）</button>
+              </div>
+            </div>
+            <div class="callout c-warn" v-if="workFeedStale"><span>更新延迟</span><span>TikHub 本次返回的最新公开作品仍是 {{ workDate(selected.extra.latest_work_at) }}。如果抖音主页已有更新，可先“补录作品链接”；系统不会把旧数据伪装成同步成功。</span></div>
+            <div class="empty" v-if="!ownWorks.length"><b>还没有同步作品</b><span>点击“同步最近作品”后，公开作品会保存在本地；之后无需重复抓取即可查看和提取。</span></div>
+            <div class="own-work-wall" v-else>
+              <article class="own-work-card" v-for="work in ownWorks" :key="work.id">
+                <label class="own-work-select"><input type="checkbox" :value="work.id" v-model="selectedWorks"><span>选择</span></label>
+                <button class="own-work-cover" v-if="(work.cover_display_url || work.cover) && !work.cover_failed" type="button" @click="openOwnWork(work)"><img :src="work.cover_display_url || work.cover" :alt="work.title + ' 封面'" loading="lazy" @error="coverFailed(work)"></button>
+                <button class="own-work-no-cover" v-else type="button" @click="openOwnWork(work)"><span>该平台未返回公开封面</span><small>{{ work.url ? '点击打开原作' : '点击生成公开原作链接' }}</small></button>
+                <div class="own-work-body">
+                  <b :title="work.title">{{ work.title }}</b>
+                  <div class="own-work-badges"><span class="badge" :class="work.performance_band==='high'?'b-ok':work.performance_band==='low'?'b-warn':'b-neu'">{{ performanceBand(work) }}</span><span class="badge" :class="work.content_stage==='仅元数据'?'b-warn':'b-ok'">{{ work.content_stage || '仅元数据' }}</span></div>
+                  <div class="own-work-meta"><span>{{ workDate(work.create_time) }}</span><span>赞 {{ number(work.likes) }}</span><span>评 {{ number(work.comments) }}</span><span>藏 {{ number(work.collects) }}</span></div>
+                  <label class="own-work-review"><span>我的判断</span><select class="input input-sm" :disabled="workSavingId===work.id" :value="work.performance_label" @change="reviewWork(work,$event.target.value)"><option value="unrated">尚未标记</option><option value="good">好内容</option><option value="average">一般</option><option value="needs_review">需复盘</option></select></label>
+                  <div class="own-work-buttons"><button class="btn btn-sm btn-pri" @click="extractOwnWork(work)">提取文案</button><button class="btn btn-sm" @click="openOwnWork(work)">{{ work.url ? '打开原作' : '生成并打开' }}</button></div>
+                </div>
+              </article>
+            </div>
           </div>
         </div>
       </div>
@@ -673,7 +918,32 @@
             <div class="chips" style="margin-bottom:10px">
               <button class="chip" v-for="r in cycle.rhythms" :key="r" :class="{active: cycle.rhythm===r}" @click="setRhythm(r)">{{ r }}</button>
             </div>
-            <div class="callout c-info" style="margin-bottom:0"><span>ⓘ</span><span>基于近 8 周完成率 <b>{{ Math.round(cycle.completion_rate*100) }}%</b>，建议保持每周 4 条。系统不会默认把「多发」当作正确答案。</span></div>
+            <div class="callout c-info" style="margin-bottom:0"><span>ⓘ</span><span>近 8 周有 <b>{{ cycle.completion_samples }}</b> 条计划样本，完成率 <b>{{ Math.round(cycle.completion_rate*100) }}%</b>；当前节奏与产能共同得到每周 <b>{{ cycle.weekly_target }}</b> 条上限。</span></div>
+            <ul class="cycle-effects"><li v-for="effect in cycle.effects" :key="effect">{{ effect }}</li></ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="card section-gap">
+        <div class="card-head"><div class="card-title">动态运营顾问 <span class="card-sub">自有作品语义与表现 + 对标/热榜/行业信号 + IP档案 + 历史复盘</span></div><button class="btn btn-sm btn-pri" :disabled="advisorBusy" @click="generateAdvisorPlan">{{ advisorBusy ? '分析中…' : '更新画像并生成本周建议' }}</button></div>
+        <div class="card-body">
+          <div class="callout c-info"><span>边界</span><span>这里生成的是可拒绝、可确认的运营建议草案；不会自动修改稳定IP档案，也不会在你确认前写入正式排期。</span></div>
+          <div class="advisor-coverage" v-if="advisorContext&&advisorContext.coverage"><span><small>自有作品正文覆盖</small><b>{{ advisorContext.coverage.text_coverage }}%</b></span><span><small>作品拆解覆盖</small><b>{{ advisorContext.coverage.analysis_coverage }}%</b></span><span><small>外部信号类别</small><b>{{ Object.keys(advisorContext.coverage.signal_categories||{}).length }}</b></span><span><small>复盘样本</small><b>{{ advisorContext.coverage.retros }}</b></span></div>
+          <div class="callout c-warn" v-if="advisorContext&&advisorContext.coverage&&advisorContext.coverage.gaps&&advisorContext.coverage.gaps.length"><span>数据缺口</span><span>{{ advisorContext.coverage.gaps.join('；') }}</span></div>
+          <div class="grid g3 section-gap" v-if="portrait&&portrait.metrics">
+            <div class="stat-card"><span>近30天作品</span><b>{{ portrait.metrics['30d'].works }}</b></div>
+            <div class="stat-card"><span>近30天平均播放</span><b>{{ number(portrait.metrics['30d'].avg_plays) }}</b></div>
+            <div class="stat-card"><span>近30天互动率</span><b>{{ portrait.metrics['30d'].engagement_rate }}%</b></div>
+          </div>
+          <div class="empty" v-if="!advisorPlans.length"><b>尚无运营建议草案</b><span>先同步自己的公开作品，再主动生成。数据不足时系统会明确提示，不会填演示结论。</span></div>
+          <div class="field-cand" v-for="plan in advisorPlans" :key="plan.id">
+            <div class="fc-body"><div class="fc-name">{{ plan.week_start }} · {{ plan.status==='DRAFT' ? '待确认草案' : '已进入正式计划' }}</div><div class="fc-val">{{ plan.plan.summary }}</div><div class="advisor-plan-items" v-if="plan.plan.items&&plan.plan.items.length"><div v-for="(item,index) in plan.plan.items" :key="index"><b>{{ item.title || item.action || ('建议 '+(index+1)) }}</b><span>{{ item.reason || item.rationale || item.description }}</span><small>依据：{{ (item.evidence_ids||[]).join('、') || item.evidence_note || '当前上下文摘要' }} · 置信度 {{ Math.round(Number(item.confidence||0)*100) }}%</small><div class="advisor-plan-actions" v-if="plan.status==='APPROVED'&&plan.tasks&&plan.tasks[index]"><span class="badge b-neu">{{ plan.tasks[index].scheduled_date }} · {{ plan.tasks[index].status }}</span><button class="btn btn-sm btn-pri" :disabled="advisorStartingTaskId===plan.tasks[index].id" @click="startAdvisorCreation(plan.tasks[index])">{{ advisorStartingTaskId===plan.tasks[index].id ? '正在连接创作工坊…' : plan.tasks[index].creation_action+' →' }}</button></div></div></div><div class="fc-src">{{ (plan.plan.items||[]).length }} 条建议 · {{ plan.provider || '规则分析' }} {{ plan.model }}</div></div>
+            <template v-if="plan.status==='DRAFT'"><button class="btn btn-sm btn-pri" @click="approveAdvisorPlan(plan)">确认进入正式排期</button><button class="btn btn-sm" @click="rejectAdvisorPlan(plan)">拒绝</button></template>
+            <button class="btn btn-sm" v-else-if="plan.status==='APPROVED'" @click="go('plan')">打开完整内容计划</button>
+          </div>
+          <div class="advisor-history section-gap" v-if="advisorHistory.length">
+            <button class="collapsible-head" @click="advisorHistoryOpen=!advisorHistoryOpen"><span><b>历史建议</b><small>已拒绝、已过期或被新方案替代的 {{ advisorHistory.length }} 份草案</small></span><span>{{ advisorHistoryOpen ? '收起' : '展开' }} <i>{{ advisorHistoryOpen ? '↑' : '↓' }}</i></span></button>
+            <div v-if="advisorHistoryOpen" class="advisor-history-list"><div class="kv-row" v-for="plan in advisorHistory" :key="plan.id"><span><b>{{ plan.week_start }}</b><small>{{ plan.plan.summary }}</small></span><span class="badge b-neu">{{ {REJECTED:'已拒绝',STALE:'周期已变化',SUPERSEDED:'已被新方案替代'}[plan.status] || plan.status }}</span></div></div>
           </div>
         </div>
       </div>
@@ -718,6 +988,30 @@
             <label class="field"><span>推广与实验</span><input class="input" v-model="cycleDraft.promotion"></label>
           </div>
           <div class="modal-foot"><button class="btn" @click="cycleOpen=false">取消</button><button class="btn btn-pri" :disabled="cycleSaving" @click="saveCycle">{{ cycleSaving ? '保存中…' : '保存周期' }}</button></div>
+        </div>
+      </div>
+
+      <div class="modal" :class="{open:batchOpen}" role="dialog" aria-modal="true" aria-labelledby="batchExtractTitle" @click.self="!batchBusy && (batchOpen=false)">
+        <div class="modal-card" style="max-width:560px">
+          <div class="modal-head"><div class="modal-title" id="batchExtractTitle">批量提取自己的作品</div><button class="modal-x" aria-label="关闭" :disabled="batchBusy" @click="batchOpen=false">×</button></div>
+          <div class="modal-body">
+            <div class="callout c-info"><span>确认</span><span>将为已选的 <b>{{ selectedWorks.length }}</b> 条作品分别创建提取任务。系统优先复用本地缓存和平台原生字幕，不会重复抓取已沉淀文案。</span></div>
+            <div class="kv-row"><span>数据源预估</span><b>¥{{ (selectedWorks.length * 0.10).toFixed(2) }} + ASR 按 Provider 实际用量</b></div>
+            <div class="kv-row"><span>无原生字幕时</span><b>任务等待单独授权 ASR，不会自动扣费</b></div>
+          </div>
+          <div class="modal-foot"><button class="btn" :disabled="batchBusy" @click="batchOpen=false">取消</button><button class="btn btn-pri" :disabled="batchBusy" @click="confirmBatchExtract">{{ batchBusy ? '正在创建任务…' : '确认并创建任务' }}</button></div>
+        </div>
+      </div>
+
+      <div class="modal" :class="{open:importWorkOpen}" role="dialog" aria-modal="true" aria-labelledby="importOwnWorkTitle" @click.self="!importWorkBusy && (importWorkOpen=false)">
+        <div class="modal-card" style="max-width:600px">
+          <div class="modal-head"><div class="modal-title" id="importOwnWorkTitle">补录抖音作品</div><button class="modal-x" aria-label="关闭" :disabled="importWorkBusy" @click="importWorkOpen=false">×</button></div>
+          <div class="modal-body">
+            <div class="callout c-info"><span>说明</span><span>当公开主页接口缓存或漏掉新作品时，可粘贴作品分享链接直接沉淀。补录不会伪造播放、点赞等指标，后续同步取得数据后会按作品 ID 更新。</span></div>
+            <label class="field"><span>作品分享链接 / 口令</span><input class="input" id="importOwnWorkLink" v-model="importWorkForm.link" placeholder="粘贴 https://v.douyin.com/... 或完整作品链接" @keyup.enter="importWork"></label>
+            <label class="field"><span>标题（可选）</span><input class="input" v-model="importWorkForm.title" placeholder="平台详情暂未返回时用于识别"></label>
+          </div>
+          <div class="modal-foot"><button class="btn" :disabled="importWorkBusy" @click="importWorkOpen=false">取消</button><button class="btn btn-pri" :disabled="importWorkBusy" @click="importWork">{{ importWorkBusy ? '正在解析…' : '补录并沉淀' }}</button></div>
         </div>
       </div>
     </section>`,

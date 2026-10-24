@@ -192,7 +192,8 @@ def main() -> int:
                 runner.replace(driver.find_element(By.ID, "benchmarkLinkInput"), "https://www.douyin.com/user/e2e-benchmark")
                 count = driver.find_element(By.ID, "benchmarkScanCount")
                 runner.replace(count, "7")
-                runner.click_contains("添加并首次同步")
+                runner.click_contains("添加并后台同步")
+                runner.wait.until(EC.invisibility_of_element_located((By.CSS_SELECTOR, ".benchmark-add-modal.open")))
                 runner.wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".benchmark-work")) == 7)
                 runner.screenshot("03-benchmark-wall")
                 runner.click_contains("分析这个作者")
@@ -263,22 +264,59 @@ def main() -> int:
 
             def analysis_compare_flow():
                 runner.nav("内容拆解")
+                before_badges = driver.find_elements(By.CSS_SELECTOR, ".research-tools-card .badge")
+                before_comparisons = 0
+                before_patterns = 0
+                for badge in before_badges:
+                    text = badge.text.strip()
+                    if text.startswith("对比样本"):
+                        digits = "".join(ch for ch in text if ch.isdigit())
+                        before_comparisons = int(digits or 0)
+                    if text.startswith("模式卡"):
+                        digits = "".join(ch for ch in text if ch.isdigit())
+                        before_patterns = int(digits or 0)
                 button = runner.wait.until(EC.element_to_be_clickable((By.ID, "addComparisonBtn")))
                 button.click()
                 modal = runner.wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".analysis-compare-modal.open")))
                 Select(modal.find_element(By.CSS_SELECTOR, "select")).select_by_value("high")
                 runner.replace(modal.find_element(By.CSS_SELECTOR, "input"), "高于账号中位数 2 倍")
                 modal.find_element(By.XPATH, ".//button[contains(.,'加入对比组')]").click()
-                runner.wait_text("1 个样本")
+                runner.wait.until(lambda _d: any(
+                    ("对比样本" in badge.text and
+                     int("".join(ch for ch in badge.text if ch.isdigit()) or 0) >= max(1, before_comparisons))
+                    for badge in driver.find_elements(By.CSS_SELECTOR, ".research-tools-card .badge")
+                ))
                 runner.click_contains("保存为模式卡")
                 pattern_modal = runner.wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".analysis-pattern-modal.open")))
                 name = pattern_modal.find_element(By.CSS_SELECTOR, "input")
                 runner.replace(name, "端到端真实模式卡")
                 pattern_modal.find_element(By.XPATH, ".//button[contains(.,'保存草稿')]").click()
-                runner.wait_text("端到端真实模式卡")
+                runner.wait.until(lambda _d: any(
+                    ("模式卡" in badge.text and
+                     int("".join(ch for ch in badge.text if ch.isdigit()) or 0) >= before_patterns + 1)
+                    for badge in driver.find_elements(By.CSS_SELECTOR, ".research-tools-card .badge")
+                ))
                 runner.screenshot("07-analysis-comparison")
 
             runner.record("内容拆解：加入表现对比组→按真实来源保存模式卡", analysis_compare_flow)
+
+            def visual_factory_flow():
+                runner.nav("视觉工厂")
+                runner.wait_text("生成工作台")
+                runner.wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".visual-layout")))
+                person_toggle = runner.wait.until(EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, ".visual-output input[type='checkbox']")))
+                assert not person_toggle.is_selected(), "人物原图不应默认启用，避免把已有成品海报再次叠进封面"
+                before = len(driver.find_elements(By.CSS_SELECTOR, ".visual-history-card"))
+                runner.click_contains("生成并保存到视觉历史")
+                runner.wait.until(lambda _d: "张视觉稿已生成并保存" in runner.body()
+                                  or len(driver.find_elements(By.CSS_SELECTOR, ".visual-result")) >= 1)
+                tabs = driver.find_elements(By.CSS_SELECTOR, ".tabs button")
+                next(tab for tab in tabs if "生成历史" in tab.text).click()
+                runner.wait.until(lambda _d: len(driver.find_elements(By.CSS_SELECTOR, ".visual-history-card")) >= before + 1)
+                runner.screenshot("08-visual-factory-history")
+
+            runner.record("视觉工厂：独立入口→本地模板生成→结果存档→历史可复用", visual_factory_flow)
 
             def modal_keyboard_flow():
                 runner.nav("账号运营")

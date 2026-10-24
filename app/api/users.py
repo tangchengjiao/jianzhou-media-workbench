@@ -10,8 +10,11 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 @router.get("")
 def list_users():
+    from .. import config
     active = current_user_id()
-    users = query("SELECT * FROM users")
+    scope = "demo" if config.DEMO_MODE else "real"
+    users = query("SELECT u.* FROM users u JOIN workspace_users w ON w.user_id=u.id "
+                  "WHERE w.data_scope=? ORDER BY u.created_at", (scope,))
     for u in users:
         u["active"] = u["id"] == active
         u["package_count"] = query_one(
@@ -43,6 +46,11 @@ def activate_user(uid: str):
     user = query_one("SELECT * FROM users WHERE id=?", (uid,))
     if not user:
         raise not_found("创作者", uid)
+    from .. import config
+    expected_scope = "demo" if config.DEMO_MODE else "real"
+    mapping = query_one("SELECT data_scope FROM workspace_users WHERE user_id=?", (uid,))
+    if not mapping or mapping.get("data_scope") != expected_scope:
+        raise not_found("当前工作空间内的创作者", uid)
     set_current_user(uid)
     return ok({"active_user": uid,
                "note": f"已切换到「{user['name']}」：会话上下文已清空，系统级配置保留。"})

@@ -137,7 +137,30 @@
   /* ================= 内容提取 ================= */
   window.PageExtraction = {
     data() { return { jobs: [], assets: null, priority: [], library: [], signals: [], uploadFile: null,
-      uploadTitle: '', uploading: false, loadError: null, pickerOpen: false, selectedSignalId: '' }; },
+      uploadTitle: '', uploading: false, uploadDragActive: false, loadError: null, pickerOpen: false,
+      selectedSignalId: '', libraryOpen: false, transcriptOpen: false, selectedAssetId: '', assetLoading: false,
+      duplicateCount: 0, cleaningJobs: false }; },
+    computed: {
+      visibleJobs() {
+        const groups = new Map();
+        const active = new Set(['RUNNING', 'QUEUED', 'WAITING_CONFIRMATION', 'CANCEL_REQUESTED']);
+        for (const job of this.jobs) {
+          const input = job.input_json || {};
+          const key = input.account_work_id ? `${job.task_type}:account:${input.account_work_id}`
+            : input.signal_id ? `${job.task_type}:signal:${input.signal_id}`
+            : input.asset_id ? `${job.task_type}:asset:${input.asset_id}`
+            : input.platform && input.video_id ? `${job.task_type}:work:${input.platform}:${input.video_id}`
+            : input.source_content_id || job.output_json?.source_content_id ? `${job.task_type}:source:${input.source_content_id || job.output_json.source_content_id}`
+            : `${job.task_type}:title:${String(input.title || job.id).replace(/\s/g, '').toLowerCase()}`;
+          const items = groups.get(key) || [];
+          items.push(job); groups.set(key, items);
+        }
+        return [...groups.values()].map((items) => {
+          const current = items.find((item) => active.has(item.status)) || items[0];
+          return { ...current, history_count: Math.max(0, items.length - 1) };
+        });
+      },
+    },
     async mounted() {
       await this.load();
       this._t = setInterval(this.loadJobs, 1500);
@@ -152,14 +175,19 @@
           this.priority = await api.get('/api/extraction/priority');
           this.library = await api.get('/api/extraction/assets');
           this.signals = await api.get('/api/radar/signals');
-          if (this.library.length) this.assets = await api.get('/api/extraction/assets/' + this.library[0].source_content_id);
+          const wanted = store.insightSelection.sourceId;
+          const initial = this.library.find((item) => item.source_content_id === wanted) || this.library[0];
+          if (initial && !this.selectedAssetId) await this.selectAsset(initial.source_content_id);
         } catch (e) { handleError(e); }
       },
       async loadJobs() {
         try {
-          this.jobs = await api.get('/api/extraction/jobs'); this.loadError = null;
+          const [jobs, duplicateSummary] = await Promise.all([
+            api.get('/api/extraction/jobs'), api.get('/api/extraction/jobs/duplicates/summary'),
+          ]);
+          this.jobs = jobs; this.duplicateCount = duplicateSummary.duplicate_count || 0; this.loadError = null;
           const done = this.jobs.find(j => j.task_type === 'extraction' && j.status === 'SUCCEEDED' && j.output_json.source_content_id);
-          if (done && (!this.assets || this.assets.id !== done.output_json.source_content_id)) {
+          if (done && !this.assets) {
             this.assets = await api.get('/api/extraction/assets/' + done.output_json.source_content_id);
           }
         } catch (e) { this.loadError = e; }
@@ -178,7 +206,28 @@
           bus.emit('open-plan', plan);
         } catch (e) { handleError(e); }
       },
-      chooseUpload(event) { this.uploadFile = event.target.files && event.target.files[0]; },
+      chooseUpload(event) { this.setUploadFile(event.target.files && event.target.files[0]); },
+      setUploadFile(file) {
+        if (!file) return;
+        const allowed = file.type.startsWith('audio/') || file.type === 'video/mp4' || /\.(wav|mp3|m4a|mp4)$/i.test(file.name);
+        if (!allowed) return toast('请选择 WAV、MP3、M4A 或 MP4 文件', 'warn');
+        if (file.size > 10 * 1024 * 1024) return toast('文件超过 10 MB，请压缩后重试', 'warn');
+        this.uploadFile = file;
+        if (!this.uploadTitle.trim()) this.uploadTitle = file.name.replace(/\.[^.]+$/, '');
+      },
+      onUploadDrop(event) {
+        this.uploadDragActive = false;
+        this.setUploadFile(event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]);
+      },
+      clearUpload() {
+        this.uploadFile = null;
+        const input = document.getElementById('extractionMediaFile');
+        if (input) input.value = '';
+      },
+      formatBytes(value) {
+        const bytes = Number(value || 0);
+        return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+      },
       async uploadAndPlan() {
         if (!this.uploadFile) return toast('请先选择一个 10 MB 以内的音频文件', 'warn');
         this.uploading = true;
@@ -199,20 +248,52 @@
       },
       async cancel(j) { try { const r = await api.post('/api/extraction/jobs/' + j.id + '/cancel'); toast(r.note, 'warn'); await this.loadJobs(); } catch (e) { handleError(e); } },
       async retry(j) { try { const r = await api.post('/api/extraction/jobs/' + j.id + '/retry'); toast(r.note); await this.loadJobs(); } catch (e) { handleError(e); } },
+      async deleteJob(j) {
+        if (!confirm(`删除任务记录《${j.input_json.title || j.id}》？\n原文、媒体与拆解资产不会删除。`)) return;
+        try { const r = await api.delete('/api/extraction/jobs/' + encodeURIComponent(j.id)); toast(r.note); await this.loadJobs(); }
+        catch (e) { handleError(e); }
+      },
+      async cleanupDuplicates() {
+        if (!this.duplicateCount || !confirm(`清理 ${this.duplicateCount} 条重复任务记录？\n每组保留当前最有效记录，内容资产不受影响。`)) return;
+        this.cleaningJobs = true;
+        try { const r = await api.post('/api/extraction/jobs/duplicates/cleanup'); toast(r.note); await this.loadJobs(); }
+        catch (e) { handleError(e); }
+        this.cleaningJobs = false;
+      },
       showError(j) { if (j.error) bus.emit('open-error', j.error); },
       async authorizeAsr(j) {
         try {
-          await api.post('/api/extraction/jobs', {
-            plan: { source: { title: j.input_json.title, signal_id: j.input_json.signal_id }, caption_available: false, cost_est: 0, cost: {}, steps: [] },
-            authorizations: { asr_when_no_caption: true },
-          });
-          toast('已明确授权 ASR，任务已重新排队');
+          const result = await api.post('/api/extraction/jobs/' + encodeURIComponent(j.id) + '/authorize-asr');
+          toast(result.note);
           await this.loadJobs();
         } catch (e) { handleError(e); }
       },
       layerStatus(a, key) {
         const v = a[key];
         return v && v.exists ? '✓' : '—';
+      },
+      async selectAsset(sourceId) {
+        this.selectedAssetId = sourceId;
+        this.assetLoading = true;
+        this.transcriptOpen = false;
+        try {
+          const detail = await api.get('/api/extraction/assets/' + sourceId);
+          if (this.selectedAssetId !== sourceId) return;
+          this.assets = detail;
+          store.insightSelection.sourceId = sourceId;
+        } catch (e) { handleError(e); }
+        if (this.selectedAssetId === sourceId) this.assetLoading = false;
+      },
+      copyTranscript() {
+        const text = this.assets && this.assets.transcript && this.assets.transcript.text;
+        if (!text) return toast('这条内容还没有完整原文', 'warn');
+        navigator.clipboard && navigator.clipboard.writeText(text);
+        toast('原始文案已复制');
+      },
+      viewAssetAnalysis(item) {
+        store.insightSelection.sourceId = item.source_content_id;
+        store.insightSelection.analysisId = item.latest_analysis_id || '';
+        go('analysis');
       },
     },
     template: `
@@ -225,20 +306,36 @@
 
       <div class="card section-gap upload-audio-card">
         <div class="card-head"><div class="card-title">上传真实音频 <span class="card-sub">WAV / MP3 / M4A / MP4 · 最大 10 MB</span></div></div>
-        <div class="card-body"><div class="upload-audio-grid">
-          <label class="field"><span>内容标题</span><input class="input" v-model="uploadTitle" placeholder="用于后续拆解与创作"></label>
-          <label class="field"><span>选择音频或含音频的视频</span><input class="input" type="file" accept="audio/*,video/mp4" @change="chooseUpload"></label>
-          <button class="btn btn-pri" style="align-self:end" :disabled="uploading" @click="uploadAndPlan">{{ uploading ? '上传中…' : '上传并生成转写计划' }}</button>
-        </div><div class="mini-note">上传后按 SHA-256 去重；原始文件与原始转写不可覆盖。执行 ASR 前仍需在计划弹层明确授权。</div></div>
+        <div class="card-body">
+          <div class="upload-audio-grid">
+            <label class="field upload-title-field"><span>内容标题</span><input class="input" v-model="uploadTitle" placeholder="用于后续拆解与创作"></label>
+            <div class="field"><span>音频或含音频的视频</span>
+              <div class="media-file-drop" :class="{ready:uploadFile,dragging:uploadDragActive}"
+                   @dragenter.prevent="uploadDragActive=true" @dragover.prevent="uploadDragActive=true"
+                   @dragleave.prevent="uploadDragActive=false" @drop.prevent="onUploadDrop">
+                <input id="extractionMediaFile" class="file-input-hidden" type="file" accept="audio/*,video/mp4,.wav,.mp3,.m4a,.mp4" @change="chooseUpload">
+                <label class="media-file-trigger" for="extractionMediaFile">
+                  <b>{{ uploadFile ? uploadFile.name : '拖拽文件到这里，或点击选择' }}</b>
+                  <span>{{ uploadFile ? formatBytes(uploadFile.size) + ' · 已通过格式与大小检查' : '支持 WAV / MP3 / M4A / MP4，单个文件不超过 10 MB' }}</span>
+                </label>
+                <button class="btn btn-sm btn-ghost media-file-clear" v-if="uploadFile" type="button" aria-label="移除已选文件" @click="clearUpload">移除</button>
+              </div>
+            </div>
+          </div>
+          <div class="upload-audio-actions">
+            <div class="mini-note">上传后按 SHA-256 去重；原始文件与原始转写不可覆盖。执行 ASR 前仍需在计划弹层明确授权。</div>
+            <button class="btn btn-pri" :disabled="uploading || !uploadFile" @click="uploadAndPlan">{{ uploading ? '正在上传并校验…' : '上传并生成转写计划' }}</button>
+          </div>
+        </div>
       </div>
 
       <div class="grid g31 section-gap">
         <div class="card">
-          <div class="card-head"><div class="card-title">提取任务 <span class="card-sub">状态机驱动 · 不存在自动变成功</span></div></div>
+          <div class="card-head"><div class="card-title">提取任务 <span class="card-sub">状态机驱动 · 不存在自动变成功</span></div><button class="btn btn-sm btn-ghost" v-if="duplicateCount" :disabled="cleaningJobs" @click="cleanupDuplicates">{{ cleaningJobs ? '清理中…' : '清理重复记录 ' + duplicateCount }}</button></div>
           <div class="card-body">
             <div class="inline-error" role="alert" v-if="loadError"><b>{{ loadError.code }}</b><span>{{ loadError.message }}</span><button class="btn btn-sm" @click="loadJobs">重试</button></div>
             <div class="empty" v-if="!jobs.length">暂无提取任务</div>
-            <div class="task-row" v-for="j in jobs" :key="j.id" :class="{failed: j.status==='FAILED'}">
+            <div class="task-row" v-for="j in visibleJobs" :key="j.id" :class="{failed: j.status==='FAILED'}">
               <div class="tr-body">
                 <div class="tr-title">《{{ j.input_json.title }}》
                   <span class="badge" :class="badge(j).cls"><span class="sdot" v-if="j.status==='RUNNING'"></span>{{ badge(j).label }}</span></div>
@@ -248,14 +345,16 @@
                   <template v-if="j.status==='SUCCEEDED'"> · 费用 ¥{{ j.cost_actual.toFixed(2) }}</template>
                   <template v-if="j.attempt_count"> · 第 {{ j.attempt_count }}/{{ j.max_attempts }} 次尝试</template>
                   <template v-if="j.status==='WAITING_CONFIRMATION'"> · 平台无原生字幕，等待你明确授权 ASR</template>
+                  <template v-if="j.history_count"> · 已合并 {{ j.history_count }} 条历史运行记录</template>
                 </div>
               </div>
               <div class="tr-prog" v-if="j.status==='RUNNING'"><div class="progress"><i :style="{width:j.progress+'%'}"></i></div></div>
               <button class="btn btn-sm btn-ghost" v-if="j.status==='RUNNING'||j.status==='QUEUED'" @click="cancel(j)">取消</button>
               <button class="btn btn-sm btn-pri" v-if="j.status==='WAITING_CONFIRMATION'" @click="authorizeAsr(j)">授权 ASR 并继续</button>
               <button class="btn btn-sm btn-danger" v-if="j.status==='FAILED'" @click="showError(j)">查看错误</button>
-              <button class="btn btn-sm" v-if="j.status==='FAILED'" @click="retry(j)">从失败点重试</button>
+              <button class="btn btn-sm" v-if="j.status==='FAILED' && (!j.error || j.error.retryable!==false)" @click="retry(j)">从失败点重试</button>
               <button class="btn btn-sm btn-pri" v-if="j.status==='SUCCEEDED' && j.task_type==='extraction'" @click="go('analysis')">去拆解</button>
+              <button class="btn btn-sm btn-ghost" v-if="['SUCCEEDED','FAILED','CANCELLED'].includes(j.status)" @click="deleteJob(j)">删除记录</button>
             </div>
           </div>
         </div>
@@ -283,6 +382,33 @@
         </div>
       </div>
 
+      <div class="card section-gap asset-library-card collapsible-section">
+        <button type="button" class="collapsible-head" :aria-expanded="libraryOpen" @click="libraryOpen=!libraryOpen">
+          <span><b>本地内容资产库</b> <span class="badge b-neu">{{ library.length }} 条</span><small>提取一次，原文和拆解结果持续保留</small></span>
+          <span>{{ libraryOpen ? '收起' : '展开查看' }} <i>{{ libraryOpen ? '▴' : '▾' }}</i></span>
+        </button>
+        <div class="card-body asset-library-body" v-if="libraryOpen">
+          <div class="empty" v-if="!library.length">暂无已沉淀内容；完成一次提取后会永久出现在这里。</div>
+          <div role="button" tabindex="0" class="asset-library-row" :class="{active:selectedAssetId===item.source_content_id}"
+               v-for="item in library" :key="item.source_content_id" @click="selectAsset(item.source_content_id)" @keydown.enter="selectAsset(item.source_content_id)">
+            <span class="asset-library-main"><b>《{{ item.title }}》</b><small>{{ item.platform || '本地' }} · {{ item.text_kind }} · {{ item.text_chars }} 字 · {{ item.analysis_count }} 次拆解</small><em v-if="item.text_preview">{{ item.text_preview }}</em></span>
+            <span class="asset-library-actions"><span class="badge" :class="item.text_available?'b-ok':'b-warn'">{{ item.text_available ? '原文已保存' : '待完整转写' }}</span><button type="button" class="btn btn-sm" @click.stop="viewAssetAnalysis(item)">{{ item.analysis_count ? '查看拆解' : '去拆解' }}</button></span>
+          </div>
+          <div class="asset-transcript-shell" v-if="assets">
+            <div class="loading compact" v-if="assetLoading">正在读取这条内容的本地原文…</div>
+            <button type="button" class="transcript-summary" v-else :aria-expanded="transcriptOpen" @click="transcriptOpen=!transcriptOpen">
+              <span><b>当前原文 · 《{{ assets.title }}》</b><small>{{ assets.transcript.kind }} · {{ assets.transcript.chars }} 字 · {{ assets.analyses.length }} 次拆解</small></span>
+              <span>{{ transcriptOpen ? '收起原文' : '展开完整原文' }}</span>
+            </button>
+            <div class="persisted-transcript compact-transcript" v-if="transcriptOpen && assets.transcript&&assets.transcript.available">
+              <div class="persisted-transcript-head"><span>完整原文已本地持久化</span><button class="btn btn-sm" type="button" @click="copyTranscript">复制原文</button></div>
+              <pre>{{ assets.transcript.text }}</pre>
+            </div>
+            <div class="empty compact" v-else-if="transcriptOpen">这条来源只有元数据，尚未形成完整原文。请重新提取并授权 ASR。</div>
+          </div>
+        </div>
+      </div>
+
       <div class="modal extraction-source-modal" :class="{open:pickerOpen}" role="dialog" aria-modal="true" aria-labelledby="extractionSourceTitle" @click.self="pickerOpen=false">
         <div class="modal-card"><div class="modal-head"><div class="modal-title" id="extractionSourceTitle">选择提取来源</div><button class="modal-x" aria-label="关闭" @click="pickerOpen=false">×</button></div><div class="modal-body"><div class="callout c-info"><span>来源</span><span>只会为你选中的真实雷达信号创建计划，不再使用固定示例 ID。</span></div><label class="field"><span>雷达信号</span><select class="input" id="extractionSignalSelect" v-model="selectedSignalId"><option value="" disabled>请选择</option><option v-for="signal in signals" :key="signal.id" :value="signal.id">{{ signal.platform }} · {{ signal.author }} · {{ signal.title }}</option></select></label><div class="empty" v-if="!signals.length">内容雷达暂无可提取信号，请先添加对标账号或创建信号。</div></div><div class="modal-foot"><button class="btn" @click="pickerOpen=false">取消</button><button class="btn btn-pri" :disabled="!selectedSignalId" @click="createSignalPlan">生成执行计划</button></div></div>
       </div>
@@ -291,7 +417,9 @@
 
   /* ================= 内容拆解 ================= */
   window.PageAnalysis = {
-    data() { return { analyses: [], pending: [], patterns: [], comparison: [], active: null, compareOpen: false, compareBucket: 'high', compareNote: '', compareSaving: false, patternOpen: false, patternName: '', patternNote: '', patternSaving: false }; },
+    data() { return { analyses: [], pending: [], patterns: [], comparison: [], active: null, activeSource: null,
+      originalOpen: false, researchOpen: false, compareOpen: false, compareBucket: 'high', compareNote: '',
+      compareSaving: false, patternOpen: false, patternName: '', patternNote: '', patternSaving: false }; },
     async mounted() { await this.load(); this._t = setInterval(this.load, 2500); },
     unmounted() { clearInterval(this._t); },
     methods: {
@@ -300,7 +428,13 @@
         try {
           const r = await api.get('/api/analysis/list');
           this.analyses = r.analyses; this.pending = r.pending_sources;
-          if (!this.active && this.analyses.length) this.active = this.analyses[0];
+          if (!this.active && this.analyses.length) {
+            const wantedAnalysis = store.insightSelection.analysisId;
+            const wantedSource = store.insightSelection.sourceId;
+            const initial = this.analyses.find((a) => a.id === wantedAnalysis) ||
+              this.analyses.find((a) => a.source_content_id === wantedSource) || this.analyses[0];
+            await this.selectAnalysis(initial);
+          }
           else if (this.active) {
             const cur = this.analyses.find((a) => a.id === this.active.id);
             if (cur) this.active = cur;
@@ -309,6 +443,27 @@
           this.comparison = await api.get('/api/analysis/comparison-items');
         } catch (e) { /* 轮询静默 */ }
       },
+      async selectAnalysis(item) {
+        if (!item) return;
+        this.active = item;
+        this.originalOpen = false;
+        store.insightSelection.analysisId = item.id;
+        store.insightSelection.sourceId = item.source_content_id;
+        try {
+          const detail = await api.get('/api/analysis/detail/' + item.id);
+          this.activeSource = detail.source;
+        } catch (e) { handleError(e); }
+      },
+      openSource(sourceId) {
+        store.insightSelection.sourceId = sourceId;
+        go('extraction');
+      },
+      copyOriginal() {
+        const text = this.activeSource && this.activeSource.text;
+        if (!text) return toast('该来源还没有完整原文', 'warn');
+        navigator.clipboard && navigator.clipboard.writeText(text);
+        toast('原始文案已复制');
+      },
       async startAnalysis(sc) {
         try {
           const plan = await api.post('/api/analysis/plans', { source_content_id: sc.id, title: sc.title });
@@ -316,6 +471,16 @@
           if (!confirm(`拆解计划：${plan.model} · ${costText}\n确认后创建任务`)) return;
           const r = await api.post('/api/analysis/jobs', { source_content_id: sc.id, title: sc.title, source_chain: ['提取 #' + sc.id] });
           toast(r.note + ' · 任务 ' + r.job_id);
+        } catch (e) { handleError(e); }
+      },
+      async reanalyzeActive() {
+        if (!this.active || !confirm('将基于当前已保存原文创建一个新的拆解版本；旧版本会完整保留。确定继续？')) return;
+        try {
+          const r = await api.post('/api/analysis/jobs', {
+            source_content_id: this.active.source_content_id, title: this.active.source_title,
+            source_chain: ['拆解 #' + this.active.id + ' 的人工重做'], force_reanalyze: true,
+          });
+          toast(r.note + ' · 新任务 ' + r.job_id);
         } catch (e) { handleError(e); }
       },
       openPattern() {
@@ -341,6 +506,8 @@
           const r = await api.post('/api/creation/projects', {
             title: this.active.result.topic || this.active.source_title,
             source_chain: chain,
+            source_content_id: this.active.source_content_id,
+            analysis_id: this.active.id,
           });
           toast('已携带拆解 #' + this.active.id + ' 创建创作项目');
           go('creation');
@@ -370,14 +537,20 @@
 
       <div class="grid g31 section-gap">
         <div class="card" v-if="active">
-          <div class="card-head"><div class="card-title">《{{ active.source_title }}》 <span class="badge b-ok">拆解完成</span></div>
+          <div class="card-head"><div class="card-title">《{{ active.source_title }}》 <span class="badge" :class="active.result.quality_status==='insufficient_source'?'b-warn':'b-ok'">{{ active.result.quality_status==='insufficient_source' ? '来源不足 · 待重做' : '拆解完成' }}</span></div>
             <span class="mini-note">拆解 #{{ active.id }} · {{ active.model }} · ¥{{ active.cost.toFixed(2) }}</span></div>
           <div class="card-body" style="padding-top:6px">
             <div class="src-chain" style="margin-bottom:12px">来源链：
               <template v-if="active.signal_id"><span class="node" @click="go('radar')">雷达 #{{ active.signal_id }}</span><em>→</em></template>
-              <span class="node" @click="go('extraction')">提取 #{{ active.source_content_id }}</span><em>→</em>
+              <span class="node" @click="openSource(active.source_content_id)">提取 #{{ active.source_content_id }}</span><em>→</em>
               <span class="node">拆解 #{{ active.id }}</span>
             </div>
+            <div class="analysis-original" v-if="activeSource&&activeSource.text">
+              <div class="analysis-original-head"><span><b>原始文案</b> · {{ activeSource.text_kind }} · {{ activeSource.text_chars }} 字 · 已本地保存</span><div><button class="btn btn-sm" :aria-expanded="originalOpen" @click="originalOpen=!originalOpen">{{ originalOpen ? '收起原文' : '展开原文' }}</button><button class="btn btn-sm" @click="copyOriginal">复制</button><button class="btn btn-sm btn-ghost" @click="openSource(active.source_content_id)">资产证据</button></div></div>
+              <pre v-if="originalOpen">{{ activeSource.text }}</pre>
+            </div>
+            <div class="callout c-warn" v-else><span>原文缺失</span><span>该拆解没有可回看的完整文案。<button class="text-btn" @click="openSource(active.source_content_id)">返回来源资产处理</button></span></div>
+            <div class="callout c-warn" v-if="active.result.quality_status==='insufficient_source'"><span>需重做</span><span>{{ active.result.quality_note }}。<button class="text-btn" @click="go('extraction')">返回内容提取并授权 ASR</button></span></div>
             <div class="ana-row"><div class="ana-label">核心选题</div>{{ active.result.topic }}</div>
             <div class="ana-row"><div class="ana-label">目标受众 / 用户问题</div>{{ (active.result.target_audience||[]).join('、') }} · “{{ active.result.user_problem }}”</div>
             <div class="ana-row" v-if="active.result.hook"><div class="ana-label">开头钩子（{{ active.result.hook.cite }}）</div>“{{ active.result.hook.text }}” —— {{ active.result.hook.mechanism }}</div>
@@ -391,15 +564,25 @@
             <div class="ana-row"><div class="ana-label" style="color:var(--ok)">可借鉴部分</div>{{ (active.result.reusable||[]).join(' · ') }}</div>
             <div class="ana-row"><div class="ana-label" style="color:var(--err)">不应照搬部分</div>{{ (active.result.non_reusable||[]).join(' · ') }}</div>
             <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-              <button class="btn btn-pri" @click="toCreation">转为我的选题</button>
-              <button class="btn" @click="openPattern">保存为模式卡</button>
-              <button class="btn btn-ghost" id="addComparisonBtn" @click="openCompare">加入对比组</button>
+              <button class="btn btn-pri" :disabled="active.result.quality_status==='insufficient_source'" @click="toCreation">转为我的选题</button>
+              <button class="btn" @click="reanalyzeActive">重新拆解为新版本</button>
+              <button class="btn" :disabled="active.result.quality_status==='insufficient_source'" @click="openPattern">保存为模式卡</button>
+              <button class="btn btn-ghost" id="addComparisonBtn" :disabled="active.result.quality_status==='insufficient_source'" @click="openCompare">加入对比组</button>
             </div>
           </div>
         </div>
         <div class="card" v-else><div class="loading">加载中</div></div>
 
         <div>
+          <div class="card section-gap analysis-history-card">
+            <div class="card-head"><div class="card-title">历史拆解 <span class="badge b-neu">{{ analyses.length }} 条</span></div></div>
+            <div class="card-body analysis-history-list">
+              <div class="empty compact" v-if="!analyses.length">暂无历史拆解</div>
+              <button type="button" v-for="item in analyses" :key="item.id" class="analysis-history-item" :class="{active:active&&active.id===item.id}" @click="selectAnalysis(item)">
+                <b>《{{ item.source_title }}》</b><small>{{ item.original_text_kind }} · {{ item.original_text_chars }} 字 · {{ item.created_at.slice(0,16).replace('T',' ') }}</small>
+              </button>
+            </div>
+          </div>
           <div class="card section-gap">
             <div class="card-head"><div class="card-title">待拆解来源</div></div>
             <div class="card-body" style="padding-top:4px">
@@ -411,17 +594,24 @@
               <div class="mini-note" style="margin-top:6px">拆解将调用当前绑定的深度分析模型；确认后才执行，实际用量进入台账。</div>
             </div>
           </div>
-          <div class="card section-gap">
-            <div class="card-head"><div class="card-title">内容模式卡</div></div>
-            <div class="card-body" style="display:flex;flex-direction:column;gap:10px;padding-top:4px">
+          <div class="card section-gap research-tools-card">
+            <button type="button" class="collapsible-head" :aria-expanded="researchOpen" @click="researchOpen=!researchOpen">
+              <span><b>研究工具</b> <span class="badge b-neu">模式卡 {{ patterns.length }}</span> <span class="badge b-neu">对比样本 {{ comparison.length }}</span><small>把单条拆解沉淀成可复用规律，再用高/中/低表现验证</small></span>
+              <span>{{ researchOpen ? '收起' : '展开使用' }} <i>{{ researchOpen ? '▴' : '▾' }}</i></span>
+            </button>
+            <div class="card-body research-tools-body" v-if="researchOpen">
+              <div class="research-explainer"><b>内容模式卡是什么？</b><span>把一条拆解里的结构、钩子或表达规律存成草稿。它不是结论；积累多个真实样本后，才适合作为创作规则。</span><button class="btn btn-sm" :disabled="!active || active.result.quality_status==='insufficient_source'" @click="openPattern">从当前拆解保存</button></div>
               <div class="pattern-card" v-for="p in patterns" :key="p.id">
-                <b style="font-size:12.5px">{{ p.name }}</b>
-                <span class="badge" :class="patternBadge(p)[0]">{{ patternBadge(p)[1] }}</span>
-                <div class="mini-note" style="margin-top:5px">来源样本 {{ p.samples }} · 置信度 {{ p.confidence }} · {{ p.fit }} · {{ p.note }}</div>
+                <b>{{ p.name }}</b><span class="badge" :class="patternBadge(p)[0]">{{ patternBadge(p)[1] }}</span>
+                <div class="mini-note">来源样本 {{ p.samples }} · 置信度 {{ p.confidence }} · {{ p.fit }} · {{ p.note }}</div>
               </div>
+              <div class="empty compact" v-if="!patterns.length">还没有模式卡。先从当前拆解保存一个草稿，后续用更多作品验证。</div>
+              <div class="research-divider"></div>
+              <div class="research-explainer"><b>组合拆解怎么用？</b><span>把同类作品按真实数据分到高/中/低表现组，横向比较共同结构，避免凭感觉认定“爆款公式”。</span><button class="btn btn-sm" :disabled="!active || active.result.quality_status==='insufficient_source'" @click="openCompare">加入当前样本</button></div>
+              <div class="kv-row" v-for="item in comparison" :key="item.analysis_id"><span><span class="badge" :class="item.performance_bucket==='high'?'b-ok':item.performance_bucket==='low'?'b-warn':'b-neu'">{{ bucketLabel(item.performance_bucket) }}</span> {{ item.title }}</span><button class="btn btn-sm" @click="selectAnalysis(analyses.find(a=>a.id===item.analysis_id))">查看</button></div>
+              <div class="empty compact" v-if="!comparison.length">暂无对比样本。至少加入 1 条高表现和 1 条普通/低表现作品，比较才有意义。</div>
             </div>
           </div>
-          <div class="card section-gap"><div class="card-head"><div class="card-title">组合拆解 <span class="badge b-neu">{{ comparison.length }} 个样本</span></div></div><div class="card-body" style="padding-top:4px"><div class="empty" v-if="!comparison.length">从左侧拆解结果加入高/中/低表现样本</div><div class="kv-row" v-for="item in comparison" :key="item.analysis_id"><span><span class="badge" :class="item.performance_bucket==='high'?'b-ok':item.performance_bucket==='low'?'b-warn':'b-neu'">{{ bucketLabel(item.performance_bucket) }}</span> {{ item.title }}</span><button class="btn btn-sm" @click="active=analyses.find(a=>a.id===item.analysis_id)||active">查看</button></div></div></div>
         </div>
       </div>
 

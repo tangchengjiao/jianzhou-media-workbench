@@ -19,6 +19,11 @@ def _configure_logging() -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     root = logging.getLogger()
     root.setLevel(logging.INFO)
+    # httpx's INFO request line includes the complete query string.  Providers
+    # such as WeChat put short-lived tokens (and the initial AppSecret exchange)
+    # in that query string, so request-line logging must never reach app.log.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     if not any(isinstance(h, RotatingFileHandler) for h in root.handlers):
         handler = RotatingFileHandler(
             LOG_DIR / "app.log", maxBytes=5 * 1024 * 1024, backupCount=5,

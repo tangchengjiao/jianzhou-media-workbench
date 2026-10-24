@@ -64,13 +64,14 @@ def tikhub_unauthorized(account: str) -> AppError:
     )
 
 
-def llm_unavailable(model: str) -> AppError:
+def llm_unavailable(model: str, timeout_seconds: int = 60,
+                    provider: str = "openai_compatible") -> AppError:
     return AppError(
         "LLM_PROVIDER_UNAVAILABLE",
-        f"模型 {model} 当前不可用（连接超时 10s）。系统不会自动切换到未授权模型，"
+        f"模型 {model} 当前不可用（连接超时 {timeout_seconds}s）。系统不会自动切换到未授权模型，"
         "请在系统设置中手动调整路由后重试。",
-        stage="llm_call", retryable=True, provider="anthropic",
-        details={"charged": False},
+        stage="llm_call", retryable=True, provider=provider,
+        details={"charged": False, "timeout_seconds": timeout_seconds},
     )
 
 

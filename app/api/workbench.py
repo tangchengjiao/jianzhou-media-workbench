@@ -55,7 +55,7 @@ def workbench_status():
     cycle = {
         **cycle_saved,
         "week": f"{week_start} 至 {week_end}",
-        "weekly_target": max(1, int(round(hours_total / 3.5))) if hours_total else 0,
+        "weekly_target": int(cycle_saved.get("weekly_target") or 0),
         "weekly_done": weekly_done,
         "hours_total": hours_total,
         "hours_left": round(max(0.0, hours_total - float(scheduled_hours or 0)), 1),
@@ -167,16 +167,28 @@ def workbench_signals():
 @router.get("/workbench/tasks")
 def workbench_tasks():
     uid = current_user_id()
-    rows = query(
-        "SELECT id, task_type, status, progress, input_json FROM jobs"
-        " WHERE user_id=? AND status IN ('RUNNING','QUEUED','CANCEL_REQUESTED')"
-        " ORDER BY created_at DESC LIMIT 8", (uid,))
-    done = query(
-        "SELECT id, task_type, status, progress, input_json FROM jobs"
-        " WHERE user_id=? AND status='SUCCEEDED' ORDER BY finished_at DESC LIMIT 3", (uid,))
-    for r in rows + done:
+    all_rows = query(
+        "SELECT id,task_type,status,progress,input_json,idempotency_key,created_at,finished_at FROM jobs "
+        "WHERE user_id=? ORDER BY created_at DESC LIMIT 120", (uid,))
+    for r in all_rows:
         r["title"] = jloads(r.get("input_json"), {}).get("title", r["task_type"])
-    return ok({"running": rows, "recent_done": done})
+    groups: dict[str, list[dict]] = {}
+    for item in all_rows:
+        raw_key = item.get("idempotency_key") or f"{item['task_type']}:{item['title']}"
+        logical_key = raw_key.split(":manual:", 1)[0]
+        groups.setdefault(logical_key, []).append(item)
+    active_statuses = {"RUNNING", "QUEUED", "CANCEL_REQUESTED", "WAITING_CONFIRMATION"}
+    running, recent_done = [], []
+    for logical_key, history in groups.items():
+        current = next((item for item in history if item["status"] in active_statuses), history[0])
+        current = {**current, "logical_key": logical_key, "history_count": len(history)}
+        if current["status"] in active_statuses:
+            running.append(current)
+        elif current["status"] == "SUCCEEDED":
+            recent_done.append(current)
+    running.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    recent_done.sort(key=lambda item: item.get("finished_at") or item.get("created_at") or "", reverse=True)
+    return ok({"running": running[:8], "recent_done": recent_done[:3]})
 
 
 class CommandIn(BaseModel):

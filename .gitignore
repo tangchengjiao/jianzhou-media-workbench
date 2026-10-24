@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv-build/
 venv/
 
 # Runtime data and secrets
@@ -22,6 +23,9 @@ data/*
 build/
 dist/
 *.spec.bak
+output/
+artifacts/
+tmp/
 
 # Editors and local agent state
 .idea/
