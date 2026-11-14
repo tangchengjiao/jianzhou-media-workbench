@@ -28,6 +28,9 @@ _RADAR_HEADERS = {
 }
 
 
+AIHOT_ITEMS_URL = "https://aihot.news/api/v1/items?mode=selected&window=24h&limit=50"
+
+
 def _public_get(url: str, *, attempts: int = 3) -> httpx.Response:
     """Retry transient connect/TLS failures without weakening certificate checks."""
     last_error: httpx.HTTPError | None = None
@@ -93,7 +96,7 @@ def sync_source(source_id: str, user_id: str) -> dict:
         source["config"] = {
             **source["config"],
             "requested_url": source["config"].get("requested_url") or original_url,
-            "url": "https://aihot.virxact.com/api/v1/items?mode=selected&window=24h&limit=50",
+            "url": AIHOT_ITEMS_URL,
             "connector": "aihot",
         }
         execute("UPDATE radar_sources SET config_json=? WHERE id=?",
@@ -224,7 +227,7 @@ def _fetch_external_feed(config: dict) -> list[dict]:
     if connector == "aihot" or _is_aihot_url(url):
         if "html" in content_type:
             response = _public_get(
-                "https://aihot.virxact.com/api/v1/items?mode=selected&window=24h&limit=50"
+                AIHOT_ITEMS_URL
             )
             response.raise_for_status()
         return _aihot_items(response.json())
@@ -304,7 +307,7 @@ def _discover_feed_url(html: str, base_url: str) -> str:
 
 
 def _is_aihot_url(url: str) -> bool:
-    return (urllib.parse.urlparse(url).hostname or "").lower() == "aihot.virxact.com"
+    return (urllib.parse.urlparse(url).hostname or "").lower() in {"aihot.news", "aihot.virxact.com"}
 
 
 def _aihot_items(payload: dict) -> list[dict]:
@@ -347,7 +350,7 @@ def probe_source(url: str) -> dict:
         raise AppError("RADAR_SOURCE_URL_MISSING", "请填写数据源地址。",
                        stage="source_probe", retryable=False)
     if _is_aihot_url(requested):
-        resolved = "https://aihot.virxact.com/api/v1/items?mode=selected&window=24h&limit=50"
+        resolved = AIHOT_ITEMS_URL
         items = _fetch_external_feed({"url": resolved, "connector": "aihot"})
         return {"connector": "aihot", "source_type": "AIHot REST API",
                 "requested_url": requested, "resolved_url": resolved,
